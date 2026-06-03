@@ -13,13 +13,27 @@
   table { border-collapse: collapse; width: 100%; }
   th { text-align: left; }
   button { font-family: inherit; cursor: pointer; }
+  #toast { position:fixed; bottom:24px; right:24px; background:#1b4332; color:#fff; padding:10px 18px; border-radius:8px; font-size:13px; font-weight:600; box-shadow:0 4px 16px rgba(0,0,0,0.18); opacity:0; pointer-events:none; transition:opacity 0.25s; z-index:9999; }
+  #toast.show { opacity:1; }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="toast"></div>
 
 <script>
-const PROXY_URL = "https://script.google.com/macros/s/AKfycbz7r-TEanf7GsxPr4FG4QUyhg-US8noF8gi4Z6bT4luLQQ3LLRuNbcwXr6CojuLwpm9ug/exec";
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+const PROXY_URL           = "https://script.google.com/macros/s/AKfycbz7r-TEanf7GsxPr4FG4QUyhg-US8noF8gi4Z6bT4luLQQ3LLRuNbcwXr6CojuLwpm9ug/exec";
+const CALENDAR_SHEET_ID   = "1UjIACDMDZNcYCaVmxUP-6DF2zeP4QMxuU0e74Kr6Ugc";
+const CALENDAR_SHEET_NAME = "Vacations";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -76,7 +90,9 @@ const LOGO = `<svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns=
 </svg>`;
 
 // ── APP STATE ──────────────────────────────────────────────────────────────────
-let SESSION = null;
+let SESSION    = null;
+let _activeTab = "tasks";
+let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date().getMonth(), _calModal = null;
 
 function render() {
   if (!SESSION) renderLogin();
@@ -167,15 +183,16 @@ function shellHTML(roleLabel, userName, mainContent) {
     </div>`;
 }
 
-function signOut() { SESSION = null; render(); }
+function signOut() { SESSION = null; _activeTab = "tasks"; render(); }
 function refreshView() { render(); }
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
 
 function renderMember() {
+  if (_activeTab === "calendar") { renderCalendar(); return; }
   const sheetName = "Tasks_" + SESSION.name.split(" ")[0];
-  document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, `<div id="member-main"><div class="spinner"></div></div>`);
+  document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, tabBarHTML() + `<div id="member-main"><div class="spinner"></div></div>`);
   loadMemberTasks(sheetName);
 }
 
@@ -251,7 +268,7 @@ async function memberSaveRow(rowIndex, sheetName) {
   try {
     await updateRow(SESSION.sheetId, sheetName, rowIndex,
       [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, t.status, t.notes]);
-    alert("Saved!");
+    showToast("Saved ✓");
   } catch(e) { alert("Save failed: " + e.message); }
 }
 
@@ -261,7 +278,8 @@ let _filterMember = "All";
 let _editingTask = null;
 
 function renderManager() {
-  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, `<div id="manager-main"><div class="spinner"></div></div>`);
+  if (_activeTab === "calendar") { renderCalendar(); return; }
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"><div class="spinner"></div></div>`);
   loadAllTasks();
 }
 
@@ -406,6 +424,7 @@ async function doSaveEdit() {
       [e.taskId, e.assignedTo, e.task, e.dueDate, e.priority, e.status, e.notes]);
     _editingTask = null;
     await reloadMemberTasks(e.sheetId, e.sheetName, e.firstName);
+    showToast("Saved ✓");
   } catch(err) { alert("Save failed: " + err.message); }
 }
 
@@ -436,6 +455,244 @@ async function doAddTask() {
     await appendRow(sheetId, sheetName, [taskId, assignedTo, task, dueDate, priority, status, notes]);
     await reloadMemberTasks(sheetId, sheetName, assignedTo.split(" ")[0]);
   } catch(e) { alert("Failed to add task: " + e.message); }
+}
+
+// ── CALENDAR ───────────────────────────────────────────────────────────────────
+function tabBarHTML() {
+  return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
+    [["tasks","Tasks"],["calendar","Calendar"]].map(([id,label]) => {
+      const a = _activeTab === id;
+      return `<button onclick="switchTab('${id}')" style="padding:7px 22px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
+    }).join("") + `</div>`;
+}
+
+function switchTab(tab) { _activeTab = tab; render(); }
+
+function rowsToEvents(rows) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2,
+    eventId:    r[0] || "",
+    memberName: r[1] || "",
+    startDate:  r[2] || "",
+    endDate:    r[3] || "",
+    notes:      r[4] || ""
+  })).filter(e => e.startDate && e.endDate);
+}
+
+function nextEventId(events) {
+  const nums = events.map(e => parseInt((e.eventId||"").replace("VAC-",""), 10)).filter(n => !isNaN(n));
+  return "VAC-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, "0");
+}
+
+function memberColor(name) {
+  const palette = ["#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#10b981","#f97316"];
+  let h = 0;
+  for (const c of (name || "")) h = ((h << 5) - h + c.charCodeAt(0)) | 0;
+  return palette[Math.abs(h) % palette.length];
+}
+
+function renderCalendar() {
+  const role = SESSION.role;
+  document.getElementById("app").innerHTML = shellHTML(role, SESSION.name, tabBarHTML() + `<div id="cal-main"><div class="spinner"></div></div>`);
+  loadCalendarEvents();
+}
+
+async function loadCalendarEvents() {
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
+    _calEvents = rowsToEvents(rows);
+    renderCalendarGrid();
+  } catch(e) {
+    const el = document.getElementById("cal-main");
+    if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load calendar: ${e.message}</div>`;
+  }
+}
+
+async function reloadCalendarEvents() {
+  const rows = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
+  _calEvents = rowsToEvents(rows);
+  renderCalendarGrid();
+}
+
+function renderCalendarGrid() {
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DAYS   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const year = _calYear, month = _calMonth;
+  const firstDay    = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const td = new Date();
+  const todayStr  = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
+  const mStart    = `${year}-${String(month+1).padStart(2,"0")}-01`;
+  const mEnd      = `${year}-${String(month+1).padStart(2,"0")}-${String(daysInMonth).padStart(2,"0")}`;
+  const monthEvts = _calEvents.filter(e => e.endDate >= mStart && e.startDate <= mEnd);
+
+  const cells = Array(firstDay).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const dayHeaders = DAYS.map(d =>
+    `<div style="text-align:center;font-size:11px;font-weight:700;color:#9ca3af;padding:8px 4px;letter-spacing:0.5px;">${d}</div>`
+  ).join("");
+
+  const rowsHTML = [];
+  for (let r = 0; r < cells.length; r += 7) {
+    const rowCells = cells.slice(r, r+7).map(day => {
+      if (!day) return `<div style="min-height:90px;background:#fafafa;border-right:1px solid #f3f4f6;"></div>`;
+      const ds = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+      const isToday = ds === todayStr;
+      const dayEvts = monthEvts.filter(e => e.startDate <= ds && e.endDate >= ds);
+      const chips = dayEvts.map(e => {
+        const bg    = memberColor(e.memberName);
+        const first = e.memberName.split(" ")[0];
+        const label = (e.startDate === ds) ? (e.notes ? `${first} · ${e.notes}` : first) : first;
+        return `<div onclick="event.stopPropagation();openCalEditModal(${e.rowIndex})"
+          title="${e.memberName}: ${e.startDate} – ${e.endDate}${e.notes ? ' | '+e.notes : ''}"
+          style="background:${bg};color:#fff;font-size:10px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>`;
+      }).join("");
+      const bgNorm = isToday ? "#f0fdf4" : "#fff";
+      const bgHov  = isToday ? "#d1fae5" : "#f9fafb";
+      return `<div onclick="openCalAddModal('${ds}')"
+        style="min-height:90px;padding:5px;border-right:1px solid #f3f4f6;background:${bgNorm};cursor:pointer;"
+        onmouseover="this.style.background='${bgHov}'" onmouseout="this.style.background='${bgNorm}'">
+        <div style="font-size:12px;font-weight:${isToday?700:500};width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:50%;${isToday?"background:#1b4332;color:#fff;":"color:#374151;"}">${day}</div>
+        ${chips}
+      </div>`;
+    }).join("");
+    rowsHTML.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #f3f4f6;">${rowCells}</div>`);
+  }
+
+  const allNames = _calEvents.length
+    ? [...new Set(_calEvents.map(e => e.memberName))].filter(Boolean)
+    : (SESSION.role === "Manager" ? SESSION.memberRows.map(r => r[0]) : [SESSION.name]);
+  const legend = allNames.length ? `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid #f3f4f6;">
+      ${allNames.map(n => `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#6b7280;">
+        <div style="width:10px;height:10px;border-radius:50%;background:${memberColor(n)};flex-shrink:0;"></div>${n.split(" ")[0]}
+      </div>`).join("")}
+    </div>` : "";
+
+  const el = document.getElementById("cal-main");
+  if (el) el.innerHTML = `
+    <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #d1fae5;">
+        <button onclick="calPrevMonth()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:6px 14px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">&#8249;</button>
+        <div style="display:flex;align-items:center;gap:14px;">
+          <span style="font-size:17px;font-weight:700;color:#1b4332;">${MONTHS[month]} ${year}</span>
+          <button onclick="openCalAddModal(null)" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;border:none;cursor:pointer;">+ Add Vacation</button>
+        </div>
+        <button onclick="calNextMonth()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:6px 14px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">&#8250;</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);background:#f9fafb;border-bottom:1px solid #f3f4f6;">${dayHeaders}</div>
+      ${rowsHTML.join("")}
+      ${legend}
+    </div>`;
+}
+
+function calPrevMonth() {
+  if (_calMonth === 0) { _calMonth = 11; _calYear--; } else _calMonth--;
+  renderCalendarGrid();
+}
+function calNextMonth() {
+  if (_calMonth === 11) { _calMonth = 0; _calYear++; } else _calMonth++;
+  renderCalendarGrid();
+}
+
+function openCalAddModal(dateStr) {
+  _calModal = { mode:"add", eventId:"", memberName: SESSION.role==="Member" ? SESSION.name : "", startDate: dateStr||"", endDate: dateStr||"", notes:"", rowIndex: null };
+  renderCalModal();
+}
+function openCalEditModal(rowIndex) {
+  const e = _calEvents.find(e => e.rowIndex === rowIndex);
+  if (!e) return;
+  _calModal = { mode:"edit", ...e };
+  renderCalModal();
+}
+
+function renderCalModal() {
+  const existing = document.getElementById("cal-modal");
+  if (existing) existing.remove();
+  const m = _calModal;
+  if (!m) return;
+  const isEdit       = m.mode === "edit";
+  const canPickMember = SESSION.role === "Manager";
+  const memberOpts   = canPickMember
+    ? SESSION.memberRows.map(r => `<option value="${r[0]}"${r[0]===m.memberName?" selected":""}>${r[0]}</option>`).join("")
+    : `<option value="${SESSION.name}">${SESSION.name}</option>`;
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="cal-modal" onclick="if(event.target===this)closeCalModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:16px;">${isEdit?"Edit":"Add"} Vacation</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Member</label>
+        <select id="cm-member" ${canPickMember?"":"disabled"}
+          style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:14px;background:${canPickMember?"#fff":"#f9fafb"};">${memberOpts}</select>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Start Date</label>
+            <input id="cm-start" type="date" value="${m.startDate}"
+              style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">End Date</label>
+            <input id="cm-end" type="date" value="${m.endDate}"
+              style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;"/>
+          </div>
+        </div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Notes</label>
+        <input id="cm-notes" value="${(m.notes||"").replace(/"/g,"&quot;")}" placeholder="e.g. Beach trip, Out of office…"
+          style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:18px;"/>
+
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${isEdit?`<button onclick="doDeleteCalEvent(${m.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">Delete</button>`:""}
+          <div style="flex:1;"></div>
+          <button onclick="closeCalModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button onclick="doSaveCalEvent()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>`);
+}
+
+function closeCalModal() {
+  _calModal = null;
+  const el = document.getElementById("cal-modal");
+  if (el) el.remove();
+}
+
+async function doSaveCalEvent() {
+  const memberName = document.getElementById("cm-member").value;
+  const startDate  = document.getElementById("cm-start").value;
+  const endDate    = document.getElementById("cm-end").value;
+  const notes      = document.getElementById("cm-notes").value;
+  const m = _calModal;
+  if (!memberName || !startDate || !endDate) { showToast("Member and dates are required."); return; }
+  if (endDate < startDate) { showToast("End date cannot be before start date."); return; }
+  try {
+    if (m.mode === "add") {
+      await appendRow(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME, [nextEventId(_calEvents), memberName, startDate, endDate, notes]);
+    } else {
+      await updateRow(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME, m.rowIndex, [m.eventId, memberName, startDate, endDate, notes]);
+    }
+    closeCalModal();
+    await reloadCalendarEvents();
+    showToast("Saved ✓");
+  } catch(e) { alert("Save failed: " + e.message); }
+}
+
+async function doDeleteCalEvent(rowIndex) {
+  if (!confirm("Delete this vacation?")) return;
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME, rowIndex);
+    closeCalModal();
+    await reloadCalendarEvents();
+    showToast("Deleted");
+  } catch(e) { alert("Delete failed: " + e.message); }
 }
 
 // ── BOOT ───────────────────────────────────────────────────────────────────────
