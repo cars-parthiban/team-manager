@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Team Managerx — cars.com</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0fdf4; min-height: 100vh; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width:32px;height:32px;border-radius:50%;border:3px solid #d1fae5;border-top-color:#1b4332;animation:spin 0.7s linear infinite;margin:3rem auto;display:block; }
+  select, input { font-family: inherit; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; }
+  button { font-family: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const PROXY_URL = "https://script.google.com/macros/s/AKfycbz7r-TEanf7GsxPr4FG4QUyhg-US8noF8gi4Z6bT4luLQQ3LLRuNbcwXr6CojuLwpm9ug/exec";
+
+// ── PROXY HELPERS ──────────────────────────────────────────────────────────────
+async function proxyCall(params) {
+  const url = PROXY_URL + "?" + new URLSearchParams(params).toString();
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Proxy error: " + res.status);
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.data;
+}
+const readConfig = () => proxyCall({ action: "getConfig" });
+const readSheet  = (sheetId, sheetName) => proxyCall({ action: "getTasks", sheetId, sheetName });
+const appendRow  = (sheetId, sheetName, values) => proxyCall({ action: "appendRow", sheetId, sheetName, values: JSON.stringify(values) });
+const updateRow  = (sheetId, sheetName, rowIndex, values) => proxyCall({ action: "updateRow", sheetId, sheetName, rowIndex, values: JSON.stringify(values) });
+const deleteRowProxy = (sheetId, sheetName, rowIndex) => proxyCall({ action: "deleteRow", sheetId, sheetName, rowIndex });
+
+// ── UTILS ──────────────────────────────────────────────────────────────────────
+function rowsToTasks(rows, sheetId) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2, sheetId,
+    taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
+    dueDate: r[3]||"", priority: r[4]||"Medium",
+    status: r[5]||"Not Started", notes: r[6]||""
+  }));
+}
+function isOverdue(d) {
+  if (!d) return false;
+  const [m,dy,y] = d.split("/");
+  const due = new Date(y, m-1, dy);
+  const today = new Date(); today.setHours(0,0,0,0);
+  return due < today;
+}
+function nextTaskId(tasks) {
+  const nums = tasks.map(t => parseInt(t.taskId.replace("TSK-",""),10)).filter(n=>!isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 0;
+  return "TSK-" + String(max+1).padStart(3,"0");
+}
+function priorityBadge(p) {
+  const map = { High:"background:#fee2e2;color:#991b1b", Medium:"background:#fef9c3;color:#854d0e", Low:"background:#dcfce7;color:#166534" };
+  return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;${map[p]||map.Medium}">${p}</span>`;
+}
+function statusBadge(s) {
+  const map = { "Not Started":"background:#f1f5f9;color:#475569","In Progress":"background:#dbeafe;color:#1e40af","Completed":"background:#dcfce7;color:#166534" };
+  return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;${map[s]||map["Not Started"]}">${s}</span>`;
+}
+const LOGO = `<svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="40" height="40" rx="10" fill="#1b4332"/>
+  <circle cx="15" cy="14" r="4" fill="#52b788"/>
+  <circle cx="25" cy="14" r="4" fill="#95d5b2"/>
+  <path d="M7 30c0-4.418 3.582-8 8-8s8 3.582 8 8" stroke="#52b788" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <path d="M21 28.5c1.2-3.8 4.6-6.5 8.5-6.5" stroke="#95d5b2" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <path d="M29.5 22c3.314 0 6 2.686 6 6" stroke="#95d5b2" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+</svg>`;
+
+// ── APP STATE ──────────────────────────────────────────────────────────────────
+let SESSION = null;
+
+function render() {
+  if (!SESSION) renderLogin();
+  else if (SESSION.role === "Manager") renderManager();
+  else renderMember();
+}
+
+// ── LOGIN ──────────────────────────────────────────────────────────────────────
+function renderLogin() {
+  document.getElementById("app").innerHTML = `
+    <div style="min-height:100vh;background:#f0fdf4;display:flex;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:16px;padding:2.5rem 2rem;box-shadow:0 4px 24px rgba(27,67,50,0.10);width:100%;max-width:380px;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:1.75rem;">
+          ${LOGO.replace('width="36"','width="44"').replace('height="36"','height="44"')}
+          <div>
+            <div style="font-size:22px;font-weight:700;color:#1b4332;letter-spacing:-0.5px;">Team Manager</div>
+            <div style="font-size:13px;color:#6b7280;">cars.com</div>
+          </div>
+        </div>
+        <div id="login-body"><div class="spinner"></div></div>
+      </div>
+    </div>`;
+  loadLoginData();
+}
+
+async function loadLoginData() {
+  try {
+    const rows = await readConfig();
+    const data = rows.slice(1).filter(r => r[0]);
+    window._configRows = data;
+    const names = data.map(r => r[0]);
+    document.getElementById("login-body").innerHTML = `
+      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Your Name</label>
+      <select id="sel-name" style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1.5px solid #d1fae5;font-size:14px;color:#1b4332;background:#f0fdf4;outline:none;appearance:none;">
+        <option value="">— Select your name —</option>
+        ${names.map(n=>`<option value="${n}">${n}</option>`).join("")}
+      </select>
+      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">PIN</label>
+      <input id="inp-pin" type="password" maxlength="4" placeholder="4-digit PIN"
+        style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:20px;border:1.5px solid #d1fae5;font-size:18px;letter-spacing:8px;color:#1b4332;background:#f0fdf4;outline:none;"/>
+      <div id="login-error"></div>
+      <button onclick="doLogin()" style="width:100%;padding:12px;border-radius:10px;background:#1b4332;color:#fff;font-size:15px;font-weight:600;border:none;">Sign In</button>`;
+    document.getElementById("inp-pin").addEventListener("keydown", e => { if(e.key==="Enter") doLogin(); });
+  } catch(e) {
+    document.getElementById("login-body").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:12px;border-radius:8px;">Could not load config: ${e.message}</div>`;
+  }
+}
+
+function doLogin() {
+  const name = document.getElementById("sel-name").value;
+  const pin  = document.getElementById("inp-pin").value;
+  const errEl = document.getElementById("login-error");
+  if (!name) { errEl.innerHTML = errorBox("Please select your name."); return; }
+  const row = window._configRows.find(r => r[0] === name);
+  if (!row || String(row[1]).trim() !== String(pin).trim()) { errEl.innerHTML = errorBox("Invalid PIN. Please try again."); return; }
+  const role = row[2];
+  const sheetId = row[3] || "";
+  if (role === "Manager") {
+    const memberRows = window._configRows.filter(r => r[2] === "Member");
+    SESSION = { name, role, memberRows };
+  } else {
+    SESSION = { name, role, sheetId };
+  }
+  render();
+}
+
+function errorBox(msg) {
+  return `<div style="background:#fee2e2;color:#991b1b;font-size:13px;padding:8px 12px;border-radius:8px;margin-bottom:16px;">${msg}</div>`;
+}
+
+// ── APP SHELL ──────────────────────────────────────────────────────────────────
+function shellHTML(roleLabel, userName, mainContent) {
+  return `
+    <div style="min-height:100vh;background:#f0fdf4;">
+      <header style="background:#1b4332;color:#fff;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:60px;box-shadow:0 2px 12px rgba(27,67,50,0.18);">
+        <div style="display:flex;align-items:center;gap:12px;">
+          ${LOGO}
+          <span style="font-size:18px;font-weight:700;letter-spacing:-0.3px;">Team Manager</span>
+          <span style="background:#52b788;color:#fff;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;margin-left:4px;">${roleLabel}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;">
+          <span style="font-size:13px;color:#95d5b2;">${userName}</span>
+          <button onclick="refreshView()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;border-radius:8px;padding:5px 10px;font-size:16px;">↻</button>
+          <button onclick="signOut()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">Sign Out</button>
+        </div>
+      </header>
+      <main style="max-width:1200px;margin:0 auto;padding:24px 20px;">${mainContent}</main>
+    </div>`;
+}
+
+function signOut() { SESSION = null; render(); }
+function refreshView() { render(); }
+
+// ── MEMBER VIEW ────────────────────────────────────────────────────────────────
+let _memberTasks = [];
+
+function renderMember() {
+  const sheetName = "Tasks_" + SESSION.name.split(" ")[0];
+  document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, `<div id="member-main"><div class="spinner"></div></div>`);
+  loadMemberTasks(sheetName);
+}
+
+async function loadMemberTasks(sheetName) {
+  try {
+    const rows = await readSheet(SESSION.sheetId, sheetName);
+    _memberTasks = rowsToTasks(rows, SESSION.sheetId);
+    renderMemberTable(sheetName);
+  } catch(e) {
+    document.getElementById("member-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+  }
+}
+
+function renderMemberTable(sheetName) {
+  const tasks = _memberTasks;
+  const total = tasks.length;
+  const done = tasks.filter(t=>t.status==="Completed").length;
+  const inProg = tasks.filter(t=>t.status==="In Progress").length;
+
+  const statsHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
+      ${[["Total Tasks",total,"#1b4332"],["In Progress",inProg,"#1e40af"],["Completed",done,"#166534"]]
+        .map(([l,v,c])=>`<div style="background:#fff;border-radius:12px;padding:1rem 1.25rem;border:1px solid #d1fae5;text-align:center;">
+          <div style="font-size:28px;font-weight:700;color:${c};">${v}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">${l}</div></div>`).join("")}
+    </div>`;
+
+  const bodyRows = tasks.length === 0
+    ? `<tr><td colspan="7" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks assigned yet.</td></tr>`
+    : tasks.map(t => {
+        const ov = isOverdue(t.dueDate) && t.status !== "Completed";
+        return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
+          <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+          <td style="padding:10px 12px;max-width:220px;">${t.task}</td>
+          <td style="padding:10px 12px;white-space:nowrap;color:${ov?"#dc2626":"#374151"};font-weight:${ov?600:400};">${t.dueDate}${ov?" ⚠":""}</td>
+          <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
+          <td style="padding:10px 12px;">
+            <select onchange="memberUpdateField(${t.rowIndex},'status',this.value,'${sheetName}')"
+              style="font-size:12px;padding:4px 8px;border-radius:6px;border:1.5px solid #d1fae5;">
+              ${["Not Started","In Progress","Completed"].map(s=>`<option${s===t.status?" selected":""}>${s}</option>`).join("")}
+            </select>
+          </td>
+          <td style="padding:10px 12px;max-width:180px;">
+            <input value="${(t.notes||"").replace(/"/g,"&quot;")}" onblur="memberUpdateField(${t.rowIndex},'notes',this.value,'${sheetName}')"
+              style="font-size:12px;padding:4px 8px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;"/>
+          </td>
+          <td style="padding:10px 12px;">
+            <button onclick="memberSaveRow(${t.rowIndex},'${sheetName}')"
+              style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Save</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+  document.getElementById("member-main").innerHTML = statsHTML + `
+    <div style="overflow-x:auto;">
+      <table style="font-size:13px;">
+        <thead><tr style="background:#f0fdf4;">
+          ${["Task ID","Task","Due Date","Priority","Status","Notes",""].map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function memberUpdateField(rowIndex, field, value, sheetName) {
+  const t = _memberTasks.find(t => t.rowIndex === rowIndex);
+  if (t) t[field] = value;
+}
+
+async function memberSaveRow(rowIndex, sheetName) {
+  const t = _memberTasks.find(t => t.rowIndex === rowIndex);
+  if (!t) return;
+  try {
+    await updateRow(SESSION.sheetId, sheetName, rowIndex,
+      [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, t.status, t.notes]);
+    alert("Saved!");
+  } catch(e) { alert("Save failed: " + e.message); }
+}
+
+// ── MANAGER VIEW ───────────────────────────────────────────────────────────────
+let _allTasks = [];
+let _filterMember = "All";
+let _editingTask = null;
+
+function renderManager() {
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, `<div id="manager-main"><div class="spinner"></div></div>`);
+  loadAllTasks();
+}
+
+async function loadAllTasks() {
+  try {
+    const all = [];
+    for (const r of SESSION.memberRows) {
+      const sheetId = r[3];
+      const firstName = r[0].split(" ")[0];
+      const sheetName = "Tasks_" + firstName;
+      try {
+        const rows = await readSheet(sheetId, sheetName);
+        rowsToTasks(rows, sheetId).forEach(t => all.push({...t, sheetName, firstName}));
+      } catch {}
+    }
+    _allTasks = all;
+    _filterMember = "All";
+    _editingTask = null;
+    renderManagerTable();
+  } catch(e) {
+    document.getElementById("manager-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+  }
+}
+
+function renderManagerTable(showAddForm) {
+  const memberNames = SESSION.memberRows.map(r => r[0]);
+  const filtered = _filterMember === "All" ? _allTasks : _allTasks.filter(t => t.assignedTo === _filterMember);
+
+  const filterBtns = memberNames.map(n => {
+    const active = _filterMember === n;
+    const count = _allTasks.filter(t => t.assignedTo === n).length;
+    return `<button onclick="setFilter('${n}')"
+      style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:600;
+      border:${active?"2px solid #1b4332":"1.5px solid #d1fae5"};
+      background:${active?"#1b4332":"#f0fdf4"};
+      color:${active?"#fff":"#1b4332"};">${n.split(" ")[0]} (${count})</button>`;
+  }).join("");
+  const clearBtn = _filterMember !== "All"
+    ? `<button onclick="setFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
+    : "";
+
+  const addForm = showAddForm ? `
+    <div style="background:#f0fdf4;border:1.5px solid #d1fae5;border-radius:12px;padding:1rem 1.25rem;margin-bottom:8px;">
+      <div style="font-size:14px;font-weight:700;color:#1b4332;margin-bottom:12px;">New Task</div>
+      <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Assign To *</label>
+          <select id="nt-assignedTo" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;">
+            <option value="">—</option>${memberNames.map(n=>`<option>${n}</option>`).join("")}
+          </select></div>
+        <div><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Task *</label>
+          <input id="nt-task" placeholder="Task description" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;"/></div>
+        <div><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Due Date</label>
+          <input id="nt-dueDate" placeholder="MM/DD/YYYY" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;"/></div>
+        <div><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Priority</label>
+          <select id="nt-priority" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;">
+            <option>High</option><option selected>Medium</option><option>Low</option></select></div>
+        <div><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Status</label>
+          <select id="nt-status" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;">
+            <option selected>Not Started</option><option>In Progress</option><option>Completed</option></select></div>
+      </div>
+      <div style="margin-bottom:12px;"><label style="font-size:11px;font-weight:600;color:#6b7280;display:block;margin-bottom:3px;">Notes</label>
+        <input id="nt-notes" placeholder="Optional notes" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;"/></div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="doAddTask()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Add Task</button>
+        <button onclick="renderManagerTable(false)" style="background:#fff;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:1px solid #d1fae5;">Cancel</button>
+      </div>
+    </div>` : `<button onclick="renderManagerTable(true)" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;margin-bottom:20px;">+ Add Task</button>`;
+
+  const IS = "font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;";
+  const bodyRows = filtered.length === 0
+    ? `<tr><td colspan="8" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks found.</td></tr>`
+    : filtered.map(t => {
+        const ov = isOverdue(t.dueDate) && t.status !== "Completed";
+        const isEdit = _editingTask && _editingTask.rowIndex === t.rowIndex && _editingTask.sheetId === t.sheetId;
+        if (isEdit) {
+          const e = _editingTask;
+          return `<tr style="background:#f0fdf4;border-bottom:1px solid #d1fae5;">
+            <td style="padding:8px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+            <td style="padding:8px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>
+            <td style="padding:8px 12px;"><input value="${e.task.replace(/"/g,"&quot;")}" oninput="_editingTask.task=this.value" style="${IS}"/></td>
+            <td style="padding:8px 12px;"><input value="${e.dueDate}" oninput="_editingTask.dueDate=this.value" placeholder="MM/DD/YYYY" style="${IS} width:110px;"/></td>
+            <td style="padding:8px 12px;"><select onchange="_editingTask.priority=this.value" style="${IS}">
+              ${["High","Medium","Low"].map(v=>`<option${v===e.priority?" selected":""}>${v}</option>`).join("")}</select></td>
+            <td style="padding:8px 12px;"><select onchange="_editingTask.status=this.value" style="${IS}">
+              ${["Not Started","In Progress","Completed"].map(v=>`<option${v===e.status?" selected":""}>${v}</option>`).join("")}</select></td>
+            <td style="padding:8px 12px;"><input value="${(e.notes||"").replace(/"/g,"&quot;")}" oninput="_editingTask.notes=this.value" style="${IS}"/></td>
+            <td style="padding:8px 12px;white-space:nowrap;">
+              <button onclick="doSaveEdit()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Save</button>
+              <button onclick="_editingTask=null;renderManagerTable()" style="background:#fff;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:1px solid #d1fae5;margin-left:6px;">Cancel</button>
+            </td></tr>`;
+        }
+        const ri = t.rowIndex, si = t.sheetId, sn = t.sheetName;
+        return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
+          <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+          <td style="padding:10px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>
+          <td style="padding:10px 12px;max-width:200px;">${t.task}</td>
+          <td style="padding:10px 12px;white-space:nowrap;color:${ov?"#dc2626":"#374151"};font-weight:${ov?600:400};">${t.dueDate}${ov?" ⚠":""}</td>
+          <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
+          <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
+          <td style="padding:10px 12px;max-width:160px;color:#6b7280;">${t.notes||""}</td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            <button onclick="startEdit(${ri},'${si}')" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
+            <button onclick="doDelete(${ri},'${si}','${sn}')" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
+          </td></tr>`;
+      }).join("");
+
+  document.getElementById("manager-main").innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">${filterBtns}${clearBtn}</div>
+    <div style="margin-bottom:20px;">${addForm}</div>
+    <div style="overflow-x:auto;">
+      <table style="font-size:13px;">
+        <thead><tr style="background:#f0fdf4;">
+          ${["Task ID","Assigned To","Task","Due Date","Priority","Status","Notes","Actions"]
+            .map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function setFilter(name) {
+  _filterMember = name;
+  renderManagerTable();
+}
+
+function startEdit(rowIndex, sheetId) {
+  _editingTask = {..._allTasks.find(t => t.rowIndex === rowIndex && t.sheetId === sheetId)};
+  renderManagerTable();
+}
+
+async function doSaveEdit() {
+  const e = _editingTask;
+  if (!e) return;
+  try {
+    await updateRow(e.sheetId, e.sheetName, e.rowIndex,
+      [e.taskId, e.assignedTo, e.task, e.dueDate, e.priority, e.status, e.notes]);
+    _editingTask = null;
+    await loadAllTasks();
+  } catch(err) { alert("Save failed: " + err.message); }
+}
+
+async function doDelete(rowIndex, sheetId, sheetName) {
+  const t = _allTasks.find(t => t.rowIndex === rowIndex && t.sheetId === sheetId);
+  if (!t || !confirm(`Delete task "${t.task}"?`)) return;
+  try {
+    await deleteRowProxy(sheetId, sheetName, rowIndex);
+    await loadAllTasks();
+  } catch(e) { alert("Delete failed: " + e.message); }
+}
+
+async function doAddTask() {
+  const assignedTo = document.getElementById("nt-assignedTo").value;
+  const task       = document.getElementById("nt-task").value;
+  const dueDate    = document.getElementById("nt-dueDate").value;
+  const priority   = document.getElementById("nt-priority").value;
+  const status     = document.getElementById("nt-status").value;
+  const notes      = document.getElementById("nt-notes").value;
+  if (!assignedTo || !task) { alert("Assigned To and Task are required."); return; }
+  const member = SESSION.memberRows.find(r => r[0] === assignedTo);
+  if (!member) { alert("Member not found."); return; }
+  const sheetId   = member[3];
+  const sheetName = "Tasks_" + assignedTo.split(" ")[0];
+  const memberTasks = _allTasks.filter(t => t.assignedTo === assignedTo);
+  const taskId = nextTaskId(memberTasks.length ? memberTasks : _allTasks);
+  try {
+    await appendRow(sheetId, sheetName, [taskId, assignedTo, task, dueDate, priority, status, notes]);
+    await loadAllTasks();
+  } catch(e) { alert("Failed to add task: " + e.message); }
+}
+
+// ── BOOT ───────────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>
