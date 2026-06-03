@@ -267,17 +267,16 @@ function renderManager() {
 
 async function loadAllTasks() {
   try {
-    const all = [];
-    for (const r of SESSION.memberRows) {
+    const results = await Promise.all(SESSION.memberRows.map(async r => {
       const sheetId = r[3];
       const firstName = r[0].split(" ")[0];
       const sheetName = "Tasks_" + firstName;
       try {
         const rows = await readSheet(sheetId, sheetName);
-        rowsToTasks(rows, sheetId).forEach(t => all.push({...t, sheetName, firstName}));
-      } catch {}
-    }
-    _allTasks = all;
+        return rowsToTasks(rows, sheetId).map(t => ({...t, sheetName, firstName}));
+      } catch { return []; }
+    }));
+    _allTasks = results.flat();
     _filterMember = "All";
     _editingTask = null;
     renderManagerTable();
@@ -392,6 +391,13 @@ function startEdit(rowIndex, sheetId) {
   renderManagerTable();
 }
 
+async function reloadMemberTasks(sheetId, sheetName, firstName) {
+  const rows = await readSheet(sheetId, sheetName);
+  const updated = rowsToTasks(rows, sheetId).map(t => ({...t, sheetName, firstName}));
+  _allTasks = _allTasks.filter(t => t.sheetId !== sheetId).concat(updated);
+  renderManagerTable();
+}
+
 async function doSaveEdit() {
   const e = _editingTask;
   if (!e) return;
@@ -399,7 +405,7 @@ async function doSaveEdit() {
     await updateRow(e.sheetId, e.sheetName, e.rowIndex,
       [e.taskId, e.assignedTo, e.task, e.dueDate, e.priority, e.status, e.notes]);
     _editingTask = null;
-    await loadAllTasks();
+    await reloadMemberTasks(e.sheetId, e.sheetName, e.firstName);
   } catch(err) { alert("Save failed: " + err.message); }
 }
 
@@ -408,7 +414,7 @@ async function doDelete(rowIndex, sheetId, sheetName) {
   if (!t || !confirm(`Delete task "${t.task}"?`)) return;
   try {
     await deleteRowProxy(sheetId, sheetName, rowIndex);
-    await loadAllTasks();
+    await reloadMemberTasks(sheetId, sheetName, t.firstName);
   } catch(e) { alert("Delete failed: " + e.message); }
 }
 
@@ -428,7 +434,7 @@ async function doAddTask() {
   const taskId = nextTaskId(memberTasks.length ? memberTasks : _allTasks);
   try {
     await appendRow(sheetId, sheetName, [taskId, assignedTo, task, dueDate, priority, status, notes]);
-    await loadAllTasks();
+    await reloadMemberTasks(sheetId, sheetName, assignedTo.split(" ")[0]);
   } catch(e) { alert("Failed to add task: " + e.message); }
 }
 
