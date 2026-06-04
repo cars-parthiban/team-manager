@@ -46,12 +46,21 @@ const TEAM_EVENTS_SHEET_NAME    = "Team_Events";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
-  const url = PROXY_URL + "?" + new URLSearchParams(params).toString();
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Proxy error: " + res.status);
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
-  return json.data;
+  const url        = PROXY_URL + "?" + new URLSearchParams(params).toString();
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), 20000); // 20s timeout
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error("Proxy error: " + res.status);
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    return json.data;
+  } catch(e) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") throw new Error("Request timed out — Google Apps Script may be cold-starting. Please try again.");
+    throw e;
+  }
 }
 const readConfig = () => readSheet(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME);
 const readSheet  = (sheetId, sheetName) => proxyCall({ action: "getTasks", sheetId, sheetName });
@@ -453,7 +462,11 @@ async function loadMemberTasks() {
       renderMemberTable();
     }
   } catch(e) {
-    if (!cached) document.getElementById("member-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+    if (!cached) document.getElementById("member-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
+      <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
+      <div style="font-size:12px;margin-bottom:12px;">${e.message}</div>
+      <button onclick="loadMemberTasks()" style="background:#991b1b;color:#fff;font-size:12px;font-weight:600;padding:6px 14px;border-radius:7px;border:none;cursor:pointer;">Retry</button>
+    </div>`;
   }
 }
 
@@ -599,7 +612,11 @@ async function loadAllTasks() {
       renderManagerTable();
     }
   } catch(e) {
-    if (!cached) document.getElementById("manager-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+    if (!cached) document.getElementById("manager-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
+      <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
+      <div style="font-size:12px;margin-bottom:12px;">${e.message}</div>
+      <button onclick="loadAllTasks()" style="background:#991b1b;color:#fff;font-size:12px;font-weight:600;padding:6px 14px;border-radius:7px;border:none;cursor:pointer;">Retry</button>
+    </div>`;
   }
 }
 
