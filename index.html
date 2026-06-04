@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Team Manager — cars.com</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%231b4332'/><circle cx='15' cy='14' r='4' fill='%2352b788'/><circle cx='25' cy='14' r='4' fill='%2395d5b2'/><path d='M7 30c0-4.418 3.582-8 8-8s8 3.582 8 8' stroke='%2352b788' stroke-width='2.2' stroke-linecap='round' fill='none'/><path d='M21 28.5c1.2-3.8 4.6-6.5 8.5-6.5' stroke='%2395d5b2' stroke-width='2.2' stroke-linecap='round' fill='none'/><path d='M29.5 22c3.314 0 6 2.686 6 6' stroke='%2395d5b2' stroke-width='2.2' stroke-linecap='round' fill='none'/></svg>">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f0fdf4; min-height: 100vh; }
@@ -15,6 +16,8 @@
   button { font-family: inherit; cursor: pointer; }
   #toast { position:fixed; bottom:24px; right:24px; background:#1b4332; color:#fff; padding:10px 18px; border-radius:8px; font-size:13px; font-weight:600; box-shadow:0 4px 16px rgba(0,0,0,0.18); opacity:0; pointer-events:none; transition:opacity 0.25s; z-index:9999; }
   #toast.show { opacity:1; }
+  textarea { font-family: inherit; }
+  .notes-toggle { background:none; border:none; color:#1b4332; font-size:10px; font-weight:700; cursor:pointer; padding:0 2px; }
 </style>
 </head>
 <body>
@@ -38,6 +41,7 @@ const TASKS_SHEET_NAME          = "Tasks";
 const CONFIG_SHEET_NAME         = "Config";
 const LOGIN_LOG_SHEET_NAME      = "Login_Log";
 const ACCOUNT_STATUS_SHEET_NAME = "Account_Status";
+const TEAM_LINKS_SHEET_NAME     = "Team_Links";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -61,8 +65,25 @@ function rowsToTasks(rows) {
     rowIndex: i + 2,
     taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
     dueDate: r[3]||"", priority: r[4]||"Medium",
-    status: r[5]||"Not Started", notes: r[6]||""
+    status: r[5]||"Not Started", notes: r[6]||"", url: r[7]||""
   }));
+}
+function normalizeUrl(url) {
+  if (!url) return "";
+  return /^https?:\/\//i.test(url) ? url : "https://" + url;
+}
+function notesCellHTML(notes, uid) {
+  if (!notes) return "";
+  const safe = notes.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  if (notes.length <= 120) return `<div style="word-break:break-word;overflow-wrap:anywhere;font-size:12px;color:#6b7280;">${safe}</div>`;
+  const shortSafe = safe.slice(0, 120);
+  const restSafe  = safe.slice(120);
+  return `<div style="font-size:12px;color:#6b7280;word-break:break-word;overflow-wrap:anywhere;">
+    <span id="ns-${uid}">${shortSafe}<span id="nr-${uid}" style="display:none;">${restSafe}</span>
+      <button class="notes-toggle" id="nb-${uid}"
+        onclick="(function(id){var r=document.getElementById('nr-'+id),b=document.getElementById('nb-'+id),e=r.style.display==='none';r.style.display=e?'inline':'none';b.textContent=e?'▴ less':'▾ more';}('${uid}'))">▾ more</button>
+    </span>
+  </div>`;
 }
 function parseDate(d) {
   if (!d) return null;
@@ -140,9 +161,12 @@ const LOGO = `<svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns=
 </svg>`;
 
 // ── APP STATE ──────────────────────────────────────────────────────────────────
-let SESSION    = null;
-let _activeTab = "tasks";
+let SESSION        = null;
+let _proxySession  = null;
+let _activeTab     = "tasks";
 let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date().getMonth(), _calModal = null, _calView = "month";
+let _calLoaded = false;
+let _actLoaded = false;
 
 function render() {
   if (!SESSION) renderLogin();
@@ -258,10 +282,13 @@ async function doLogin() {
   }
 
   const role = row[2];
+  const parseTeams = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
   if (role === "Manager") {
-    SESSION = { name, role, memberRows: window._configRows.filter(r => r[2] === "Member") };
+    const memberRows = window._configRows.filter(r => r[2] === "Member");
+    const teams = [...new Set(window._configRows.flatMap(r => parseTeams(r[6])))];
+    SESSION = { name, role, memberRows, teams };
   } else {
-    SESSION = { name, role };
+    SESSION = { name, role, teams: parseTeams(row[6]) };
   }
   resetAccountStatus(name);
   render();
@@ -320,17 +347,26 @@ function errorBox(msg) {
 
 // ── APP SHELL ──────────────────────────────────────────────────────────────────
 function shellHTML(roleLabel, userName, mainContent) {
+  const proxyBanner = _proxySession ? `
+    <div style="background:#d97706;color:#fff;padding:8px 24px;display:flex;align-items:center;justify-content:space-between;font-size:13px;">
+      <span>👤 Viewing as <strong>${userName}</strong> — Member view (read-only proxy)</span>
+      <button onclick="returnToManager()" style="background:#fff;color:#d97706;font-size:12px;font-weight:700;padding:5px 14px;border-radius:7px;border:none;cursor:pointer;">← Return to Manager</button>
+    </div>` : "";
+  const viewAsBtn = (!_proxySession && SESSION && SESSION.role === "Manager") ? `
+    <button onclick="openViewAsModal()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">View As</button>` : "";
   return `
     <div style="min-height:100vh;background:#f0fdf4;">
+      ${proxyBanner}
       <header style="background:#1b4332;color:#fff;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:60px;box-shadow:0 2px 12px rgba(27,67,50,0.18);">
         <div style="display:flex;align-items:center;gap:12px;">
           ${LOGO}
           <span style="font-size:18px;font-weight:700;letter-spacing:-0.3px;">Team Manager</span>
           <span style="background:#52b788;color:#fff;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;margin-left:4px;">${roleLabel}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:16px;">
+        <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:13px;color:#95d5b2;">${userName}</span>
           <button onclick="refreshView()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;border-radius:8px;padding:5px 10px;font-size:16px;">↻</button>
+          ${viewAsBtn}
           <button onclick="openChangePinModal()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">Change PIN</button>
           <button onclick="signOut()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">Sign Out</button>
         </div>
@@ -339,28 +375,77 @@ function shellHTML(roleLabel, userName, mainContent) {
     </div>`;
 }
 
-function signOut() { SESSION = null; _activeTab = "tasks"; render(); }
-function refreshView() { render(); }
+function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; render(); }
+function refreshView() {
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY);
+  _allTasks = []; _memberTasks = []; _calEvents = []; _allLinks = [];
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false;
+  render();
+}
+
+function _sGet(k)    { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch { return null; } }
+function _sSet(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} }
+function _sDel(k)    { try { sessionStorage.removeItem(k); } catch {} }
+
+function _tasksCacheKey() { return "tmgr_tasks_" + (SESSION ? SESSION.name : ""); }
+function getCachedTasks()      { return _sGet(_tasksCacheKey()); }
+function setCachedTasks(tasks) { _sSet(_tasksCacheKey(), tasks); }
+function clearTasksCache()     { _sDel(_tasksCacheKey()); }
+
+const CAL_CACHE_KEY = "tmgr_cal";
+const ACT_CACHE_KEY = "tmgr_act";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
 let _memberEditingTask = null;
 
 function renderMember() {
-  if (_activeTab === "calendar") { renderCalendar(); return; }
-  document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, tabBarHTML() + `<div id="member-main"><div class="spinner"></div></div>`);
-  loadMemberTasks();
+  if (_activeTab === "calendar")   { renderCalendar();   return; }
+  if (_activeTab === "links")      { renderLinks();      return; }
+  if (_activeTab === "directory")  { renderDirectory();  return; }
+  document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, tabBarHTML() + `<div id="member-main"></div>`);
+  if (_memberTasks.length > 0) {
+    renderMemberTable();
+    _bgRefreshMemberTasks();
+  } else {
+    document.getElementById("member-main").innerHTML = `<div class="spinner"></div>`;
+    loadMemberTasks();
+  }
 }
 
 async function loadMemberTasks() {
-  try {
-    const rows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
-    _memberTasks = rowsToTasks(rows).filter(t => t.assignedTo === SESSION.name);
+  const cached = getCachedTasks();
+  if (cached) {
+    _memberTasks = cached.filter(t => t.assignedTo === SESSION.name);
     _memberEditingTask = null;
     renderMemberTable();
-  } catch(e) {
-    document.getElementById("member-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
   }
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const all  = rowsToTasks(rows);
+    setCachedTasks(all);
+    const fresh = all.filter(t => t.assignedTo === SESSION.name);
+    if (JSON.stringify(fresh) !== JSON.stringify(_memberTasks)) {
+      _memberTasks = fresh;
+      _memberEditingTask = null;
+      renderMemberTable();
+    }
+  } catch(e) {
+    if (!cached) document.getElementById("member-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+  }
+}
+
+async function _bgRefreshMemberTasks() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const all   = rowsToTasks(rows);
+    setCachedTasks(all);
+    const fresh = all.filter(t => t.assignedTo === SESSION.name);
+    if (JSON.stringify(fresh) !== JSON.stringify(_memberTasks)) {
+      _memberTasks = fresh;
+      renderMemberTable();
+    }
+  } catch {}
 }
 
 function renderMemberTable() {
@@ -377,30 +462,12 @@ function renderMemberTable() {
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">${l}</div></div>`).join("")}
     </div>`;
 
-  const IS = "font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;";
   const addBtn = `<button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;margin-bottom:16px;">+ Add Task</button>`;
 
   const bodyRows = tasks.length === 0
     ? `<tr><td colspan="7" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks yet.</td></tr>`
     : tasks.map(t => {
-        const ov     = isOverdue(t.dueDate) && t.status !== "Completed";
-        const isEdit = _memberEditingTask && _memberEditingTask.rowIndex === t.rowIndex;
-        if (isEdit) {
-          const e = _memberEditingTask;
-          return `<tr style="background:#f0fdf4;border-bottom:1px solid #d1fae5;">
-            <td style="padding:8px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
-            <td style="padding:8px 12px;"><input value="${e.task.replace(/"/g,"&quot;")}" oninput="_memberEditingTask.task=this.value" style="${IS}"/></td>
-            <td style="padding:8px 12px;"><input value="${e.dueDate}" oninput="_memberEditingTask.dueDate=this.value" placeholder="MM/DD/YYYY" style="${IS} width:110px;"/></td>
-            <td style="padding:8px 12px;"><select onchange="_memberEditingTask.priority=this.value" style="${IS}">
-              ${["High","Medium","Low"].map(v=>`<option${v===e.priority?" selected":""}>${v}</option>`).join("")}</select></td>
-            <td style="padding:8px 12px;"><select onchange="_memberEditingTask.status=this.value" style="${IS}">
-              ${["Not Started","In Progress","Completed"].map(v=>`<option${v===e.status?" selected":""}>${v}</option>`).join("")}</select></td>
-            <td style="padding:8px 12px;"><input value="${(e.notes||"").replace(/"/g,"&quot;")}" oninput="_memberEditingTask.notes=this.value" style="${IS}"/></td>
-            <td style="padding:8px 12px;white-space:nowrap;">
-              <button onclick="memberSaveEdit()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Save</button>
-              <button onclick="_memberEditingTask=null;renderMemberTable()" style="background:#fff;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:1px solid #d1fae5;margin-left:6px;">Cancel</button>
-            </td></tr>`;
-        }
+        const ov = isOverdue(t.dueDate) && t.status !== "Completed";
         return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
           <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
           <td style="padding:10px 12px;max-width:220px;">${t.task}</td>
@@ -410,9 +477,12 @@ function renderMemberTable() {
           </td>
           <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
           <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
-          <td style="padding:10px 12px;max-width:160px;color:#6b7280;">${t.notes||""}</td>
+          <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
-            <button onclick="memberStartEdit(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
+            ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
+          </td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
             <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
           </td></tr>`;
       }).join("");
@@ -421,28 +491,13 @@ function renderMemberTable() {
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
-          ${["Task ID","Task","Due Date","Priority","Status","Notes","Actions"].map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+          ${["Task ID","Task","Due Date","Priority","Status","Notes","URL","Actions"].map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </div>`;
 }
 
-function memberStartEdit(rowIndex) {
-  _memberEditingTask = { ..._memberTasks.find(t => t.rowIndex === rowIndex) };
-  renderMemberTable();
-}
-
-async function memberSaveEdit() {
-  const e = _memberEditingTask;
-  if (!e) return;
-  try {
-    await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, e.rowIndex,
-      [e.taskId, e.assignedTo, e.task, e.dueDate, e.priority, e.status, e.notes]);
-    await loadMemberTasks();
-    showToast("Saved ✓");
-  } catch(err) { alert("Save failed: " + err.message); }
-}
 
 async function memberDeleteTask(rowIndex) {
   const t = _memberTasks.find(t => t.rowIndex === rowIndex);
@@ -460,11 +515,12 @@ async function memberAddTask() {
   const priority = document.getElementById("at-priority").value;
   const status   = document.getElementById("at-status").value;
   const notes    = document.getElementById("at-notes").value;
+  const url      = document.getElementById("at-url").value.trim();
   if (!task) { document.getElementById("at-error").textContent = "Task description is required."; return; }
   try {
     const allRows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
     const taskId  = nextTaskId(rowsToTasks(allRows));
-    await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, SESSION.name, task, dueDate, priority, status, notes]);
+    await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, SESSION.name, task, dueDate, priority, status, notes, url]);
     closeAddTaskModal();
     await loadMemberTasks();
     showToast("Task added ✓");
@@ -479,22 +535,54 @@ let _addTaskMembers = new Set();
 let _selectedTaskRows = new Set();
 
 function renderManager() {
-  if (_activeTab === "calendar")  { renderCalendar();  return; }
-  if (_activeTab === "activity")  { renderActivity();  return; }
-  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"><div class="spinner"></div></div>`);
-  loadAllTasks();
+  if (_activeTab === "calendar")   { renderCalendar();   return; }
+  if (_activeTab === "activity")   { renderActivity();   return; }
+  if (_activeTab === "links")      { renderLinks();      return; }
+  if (_activeTab === "directory")  { renderDirectory();  return; }
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
+  if (_allTasks.length > 0) {
+    renderManagerTable();
+    _bgRefreshAllTasks();
+  } else {
+    document.getElementById("manager-main").innerHTML = `<div class="spinner"></div>`;
+    loadAllTasks();
+  }
 }
 
 async function loadAllTasks() {
-  try {
-    const rows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
-    _allTasks = rowsToTasks(rows);
+  const cached = getCachedTasks();
+  if (cached) {
+    _allTasks = cached;
     _filterMember = "All";
     _editingTask = null;
     renderManagerTable();
-  } catch(e) {
-    document.getElementById("manager-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
   }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const fresh = rowsToTasks(rows);
+    setCachedTasks(fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_allTasks)) {
+      _allTasks = fresh;
+      _filterMember = "All";
+      _editingTask = null;
+      renderManagerTable();
+    }
+  } catch(e) {
+    if (!cached) document.getElementById("manager-main").innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load tasks: ${e.message}</div>`;
+  }
+}
+
+async function _bgRefreshAllTasks() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const fresh = rowsToTasks(rows);
+    setCachedTasks(fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_allTasks)) {
+      _allTasks = fresh;
+      _selectedTaskRows.clear();
+      renderManagerTable();
+    }
+  } catch {}
 }
 
 function renderManagerTable(showAddForm) {
@@ -525,30 +613,11 @@ function renderManagerTable(showAddForm) {
   const IS = "font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;";
   const allChecked = filtered.length > 0 && filtered.every(t => _selectedTaskRows.has(t.rowIndex));
   const bodyRows = filtered.length === 0
-    ? `<tr><td colspan="9" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks found.</td></tr>`
+    ? `<tr><td colspan="10" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks found.</td></tr>`
     : filtered.map(t => {
-        const ov     = isOverdue(t.dueDate) && t.status !== "Completed";
-        const isEdit = _editingTask && _editingTask.rowIndex === t.rowIndex;
+        const ov      = isOverdue(t.dueDate) && t.status !== "Completed";
         const checked = _selectedTaskRows.has(t.rowIndex);
-        if (isEdit) {
-          const e = _editingTask;
-          return `<tr style="background:#f0fdf4;border-bottom:1px solid #d1fae5;">
-            <td style="padding:8px 12px;"><input type="checkbox" disabled/></td>
-            <td style="padding:8px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
-            <td style="padding:8px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>
-            <td style="padding:8px 12px;"><input value="${e.task.replace(/"/g,"&quot;")}" oninput="_editingTask.task=this.value" style="${IS}"/></td>
-            <td style="padding:8px 12px;"><input value="${e.dueDate}" oninput="_editingTask.dueDate=this.value" placeholder="YYYY-MM-DD" style="${IS} width:120px;"/></td>
-            <td style="padding:8px 12px;"><select onchange="_editingTask.priority=this.value" style="${IS}">
-              ${["High","Medium","Low"].map(v=>`<option${v===e.priority?" selected":""}>${v}</option>`).join("")}</select></td>
-            <td style="padding:8px 12px;"><select onchange="_editingTask.status=this.value" style="${IS}">
-              ${["Not Started","In Progress","Completed"].map(v=>`<option${v===e.status?" selected":""}>${v}</option>`).join("")}</select></td>
-            <td style="padding:8px 12px;"><input value="${(e.notes||"").replace(/"/g,"&quot;")}" oninput="_editingTask.notes=this.value" style="${IS}"/></td>
-            <td style="padding:8px 12px;white-space:nowrap;">
-              <button onclick="doSaveEdit()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Save</button>
-              <button onclick="_editingTask=null;renderManagerTable()" style="background:#fff;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:1px solid #d1fae5;margin-left:6px;">Cancel</button>
-            </td></tr>`;
-        }
-        const ri = t.rowIndex;
+        const ri      = t.rowIndex;
         return `<tr style="background:${checked?"#f0fdf4":ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
           <td style="padding:10px 12px;text-align:center;">
             <input type="checkbox" ${checked?"checked":""} onchange="toggleTaskSelect(${ri})" style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;"/>
@@ -562,9 +631,12 @@ function renderManagerTable(showAddForm) {
           </td>
           <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
           <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
-          <td style="padding:10px 12px;max-width:160px;color:#6b7280;">${t.notes||""}</td>
+          <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
-            <button onclick="startEdit(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
+            ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
+          </td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
             <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
           </td></tr>`;
       }).join("");
@@ -578,7 +650,7 @@ function renderManagerTable(showAddForm) {
           <th style="padding:10px 12px;border-bottom:2px solid #d1fae5;text-align:center;">
             <input type="checkbox" ${allChecked?"checked":""} onchange="toggleSelectAll()" style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;" title="Select all"/>
           </th>
-          ${["Task ID","Assigned To","Task","Due Date","Priority","Status","Notes","Actions"]
+          ${["Task ID","Assigned To","Task","Due Date","Priority","Status","Notes","URL","Actions"]
             .map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
         </tr></thead>
         <tbody>${bodyRows}</tbody>
@@ -634,28 +706,12 @@ function toggleAllMembers() {
   renderAddTaskModal();
 }
 
-function startEdit(rowIndex) {
-  _editingTask = {..._allTasks.find(t => t.rowIndex === rowIndex)};
-  renderManagerTable();
-}
-
 async function reloadAllTasks() {
   const rows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
   _allTasks = rowsToTasks(rows);
+  setCachedTasks(_allTasks);
   _selectedTaskRows.clear();
   renderManagerTable();
-}
-
-async function doSaveEdit() {
-  const e = _editingTask;
-  if (!e) return;
-  try {
-    await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, e.rowIndex,
-      [e.taskId, e.assignedTo, e.task, e.dueDate, e.priority, e.status, e.notes]);
-    _editingTask = null;
-    await reloadAllTasks();
-    showToast("Saved ✓");
-  } catch(err) { alert("Save failed: " + err.message); }
 }
 
 async function doDelete(rowIndex) {
@@ -674,13 +730,14 @@ async function doAddTask() {
   const priority = document.getElementById("at-priority").value;
   const status   = document.getElementById("at-status").value;
   const notes    = document.getElementById("at-notes").value;
+  const url      = document.getElementById("at-url").value.trim();
   if (!selected.length) { document.getElementById("at-error").textContent = "Please select at least one team member."; return; }
   if (!task) { document.getElementById("at-error").textContent = "Task description is required."; return; }
   try {
     let base = _allTasks.slice();
     for (const name of selected) {
       const taskId = nextTaskId(base);
-      await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, name, task, dueDate, priority, status, notes]);
+      await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, name, task, dueDate, priority, status, notes, url]);
       base.push({ taskId });
     }
     closeAddTaskModal();
@@ -688,6 +745,127 @@ async function doAddTask() {
     showToast(`Task added for ${selected.length} member${selected.length > 1 ? "s" : ""} ✓`);
   } catch(e) { alert("Failed to add task: " + e.message); }
 }
+
+// ── EDIT TASK MODAL ────────────────────────────────────────────────────────────
+function openEditTaskModal(rowIndex) {
+  const isManager = SESSION.role === "Manager";
+  const task = isManager
+    ? _allTasks.find(t => t.rowIndex === rowIndex)
+    : _memberTasks.find(t => t.rowIndex === rowIndex);
+  if (!task) return;
+  _editTaskModal = { ...task };
+  renderEditTaskModal();
+}
+
+function renderEditTaskModal() {
+  const existing = document.getElementById("edit-task-modal");
+  if (existing) existing.remove();
+  const t = _editTaskModal;
+  if (!t) return;
+  const isManager = SESSION.role === "Manager";
+  const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
+
+  const memberOpts = isManager
+    ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])].map(n =>
+        `<option value="${n}"${n===t.assignedTo?" selected":""}>${n}</option>`).join("")
+    : `<option>${t.assignedTo}</option>`;
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="edit-task-modal" onclick="if(event.target===this)closeEditTaskModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.25);max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#1b4332;">Edit Task</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:2px;">${t.taskId}</div>
+          </div>
+        </div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Assigned To</label>
+        <select id="et-assignedTo" ${isManager?"":"disabled"}
+          style="${F} margin-bottom:14px;background:${isManager?"#fff":"#f9fafb"};">${memberOpts}</select>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Task *</label>
+        <input id="et-task" value="${t.task.replace(/"/g,"&quot;")}" placeholder="Task description"
+          style="${F} margin-bottom:14px;"/>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Due Date</label>
+            <input id="et-dueDate" type="date" value="${t.dueDate}" style="${F}"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Priority</label>
+            <select id="et-priority" style="${F}">
+              ${["High","Medium","Low"].map(v=>`<option${v===t.priority?" selected":""}>${v}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Status</label>
+            <select id="et-status" style="${F}">
+              ${["Not Started","In Progress","Completed"].map(v=>`<option${v===t.status?" selected":""}>${v}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Notes</label>
+        <textarea id="et-notes" placeholder="Optional notes"
+          style="${F} height:72px;resize:vertical;margin-bottom:14px;">${(t.notes||"").replace(/</g,"&lt;")}</textarea>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">URL <span style="font-weight:400;text-transform:none;color:#9ca3af;">(optional link to open)</span></label>
+        <input id="et-url" type="url" value="${(t.url||"").replace(/"/g,"&quot;")}" placeholder="https://..."
+          style="${F} margin-bottom:14px;"/>
+
+        <div id="et-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button onclick="doDeleteFromEditModal()"
+            style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">Delete</button>
+          <div style="flex:1;"></div>
+          <button onclick="closeEditTaskModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button onclick="doSaveEditModal()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>`);
+  document.getElementById("et-task").focus();
+}
+
+function closeEditTaskModal() {
+  _editTaskModal = null;
+  const el = document.getElementById("edit-task-modal");
+  if (el) el.remove();
+}
+
+async function doSaveEditModal() {
+  const t          = _editTaskModal;
+  const assignedTo = document.getElementById("et-assignedTo").value;
+  const task       = document.getElementById("et-task").value.trim();
+  const dueDate    = document.getElementById("et-dueDate").value;
+  const priority   = document.getElementById("et-priority").value;
+  const status     = document.getElementById("et-status").value;
+  const notes      = document.getElementById("et-notes").value;
+  const url        = document.getElementById("et-url").value.trim();
+  const errEl      = document.getElementById("et-error");
+  if (!task) { errEl.textContent = "Task description is required."; return; }
+  try {
+    await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, t.rowIndex,
+      [t.taskId, assignedTo, task, dueDate, priority, status, notes, url]);
+    closeEditTaskModal();
+    if (SESSION.role === "Manager") await reloadAllTasks();
+    else await loadMemberTasks();
+    showToast("Saved ✓");
+  } catch(e) { errEl.textContent = "Save failed: " + e.message; }
+}
+
+async function doDeleteFromEditModal() {
+  const t = _editTaskModal;
+  if (!t || !confirm(`Delete task "${t.task}"?`)) return;
+  closeEditTaskModal();
+  if (SESSION.role === "Manager") await doDelete(t.rowIndex);
+  else await memberDeleteTask(t.rowIndex);
+}
+
+let _editTaskModal = null;
 
 // ── ADD TASK MODAL ─────────────────────────────────────────────────────────────
 function openAddTaskModal() {
@@ -719,6 +897,7 @@ function renderAddTaskModal() {
   const savedTask    = existing ? document.getElementById("at-task")?.value    || "" : "";
   const savedDate    = existing ? document.getElementById("at-dueDate")?.value || "" : "";
   const savedNotes   = existing ? document.getElementById("at-notes")?.value   || "" : "";
+  const savedUrl     = existing ? document.getElementById("at-url")?.value     || "" : "";
   const savedPri     = existing ? document.getElementById("at-priority")?.value || "Medium" : "Medium";
   const savedStatus  = existing ? document.getElementById("at-status")?.value  || "Not Started" : "Not Started";
   if (existing) existing.remove();
@@ -727,7 +906,7 @@ function renderAddTaskModal() {
     <div id="add-task-modal" onclick="if(event.target===this)closeAddTaskModal()"
       style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
       <div onclick="event.stopPropagation()"
-        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.25);max-height:90vh;overflow-y:auto;">
         <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:16px;">Add Task</div>
         ${memberSection}
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Task *</label>
@@ -752,7 +931,10 @@ function renderAddTaskModal() {
           </div>
         </div>
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Notes</label>
-        <input id="at-notes" value="${savedNotes.replace(/"/g,"&quot;")}" placeholder="Optional notes"
+        <textarea id="at-notes" placeholder="Optional notes"
+          style="${F} height:64px;resize:vertical;margin-bottom:14px;">${savedNotes.replace(/</g,"&lt;")}</textarea>
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">URL <span style="font-weight:400;text-transform:none;color:#9ca3af;">(optional link to open)</span></label>
+        <input id="at-url" type="url" value="${savedUrl.replace(/"/g,"&quot;")}" placeholder="https://..."
           style="${F} margin-bottom:14px;"/>
         <div id="at-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
@@ -772,7 +954,7 @@ function closeAddTaskModal() {
 
 // ── CALENDAR ───────────────────────────────────────────────────────────────────
 function tabBarHTML() {
-  const tabs = [["tasks","Tasks"],["calendar","Calendar"]];
+  const tabs = [["tasks","Tasks"],["calendar","Calendar"],["links","Links"],["directory","Directory"]];
   if (SESSION.role === "Manager") tabs.push(["activity","Activity"]);
   return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
     tabs.map(([id,label]) => {
@@ -810,6 +992,14 @@ function nextEventId(events) {
   return "VAC-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, "0");
 }
 
+function teamColor(t) {
+  if (!t || t === "All") return { bg:"#f1f5f9", color:"#475569", border:"#e2e8f0" };
+  const palette = ["#dbeafe|#1e40af|#bfdbfe","#dcfce7|#166534|#bbf7d0","#fef9c3|#854d0e|#fde68a",
+                   "#fce7f3|#9d174d|#fbcfe8","#ede9fe|#6d28d9|#ddd6fe"];
+  let h = 0; for (const c of t) h = ((h<<5)-h+c.charCodeAt(0))|0;
+  const [bg,color,border] = palette[Math.abs(h)%palette.length].split("|");
+  return { bg, color, border };
+}
 function memberColor(name) {
   const palette = ["#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#10b981","#f97316"];
   let h = 0;
@@ -819,25 +1009,58 @@ function memberColor(name) {
 
 function renderCalendar() {
   const role = SESSION.role;
-  document.getElementById("app").innerHTML = shellHTML(role, SESSION.name, tabBarHTML() + `<div id="cal-main"><div class="spinner"></div></div>`);
-  loadCalendarEvents();
+  document.getElementById("app").innerHTML = shellHTML(role, SESSION.name, tabBarHTML() + `<div id="cal-main"></div>`);
+  if (_calLoaded) {
+    _calView === "year" ? renderYearView() : renderCalendarGrid();
+    _bgRefreshCal();
+  } else {
+    document.getElementById("cal-main").innerHTML = `<div class="spinner"></div>`;
+    loadCalendarEvents();
+  }
 }
 
 async function loadCalendarEvents() {
-  try {
-    const rows = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
-    _calEvents = rowsToEvents(rows);
+  const cached = _sGet(CAL_CACHE_KEY);
+  if (cached) {
+    _calEvents = cached;
+    _calLoaded = true;
     _calView === "year" ? renderYearView() : renderCalendarGrid();
+  }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
+    const fresh = rowsToEvents(rows);
+    _sSet(CAL_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_calEvents)) {
+      _calEvents = fresh;
+      _calView === "year" ? renderYearView() : renderCalendarGrid();
+    }
+    _calLoaded = true;
   } catch(e) {
-    const el = document.getElementById("cal-main");
-    if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load calendar: ${e.message}</div>`;
+    if (!cached) {
+      const el = document.getElementById("cal-main");
+      if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load calendar: ${e.message}</div>`;
+    }
   }
 }
 
 async function reloadCalendarEvents() {
-  const rows = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
-  _calEvents = rowsToEvents(rows);
+  const rows  = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
+  _calEvents  = rowsToEvents(rows);
+  _sSet(CAL_CACHE_KEY, _calEvents);
+  _calLoaded  = true;
   _calView === "year" ? renderYearView() : renderCalendarGrid();
+}
+
+async function _bgRefreshCal() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
+    const fresh = rowsToEvents(rows);
+    _sSet(CAL_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_calEvents)) {
+      _calEvents = fresh;
+      _calView === "year" ? renderYearView() : renderCalendarGrid();
+    }
+  } catch {}
 }
 
 function renderCalendarGrid() {
@@ -1184,25 +1407,57 @@ async function logLoginActivity() {
 }
 
 function renderActivity() {
-  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="activity-main"><div class="spinner"></div></div>`);
-  loadActivityLog();
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="activity-main"></div>`);
+  if (_actLoaded) {
+    const cached = _sGet(ACT_CACHE_KEY);
+    if (cached) renderActivityTable(cached);
+    _bgRefreshActivity();
+  } else {
+    document.getElementById("activity-main").innerHTML = `<div class="spinner"></div>`;
+    loadActivityLog();
+  }
 }
 
 async function loadActivityLog() {
+  const cached = _sGet(ACT_CACHE_KEY);
+  if (cached) {
+    _actLoaded = true;
+    renderActivityTable(cached);
+  }
   try {
     const [logRows, statusRows] = await Promise.all([
       readSheet(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME).catch(() => []),
       readSheet(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME).catch(() => [])
     ]);
     window._accountStatus = rowsToAccountStatus(statusRows);
-    renderActivityTable(logRows);
+    _sSet(ACT_CACHE_KEY, logRows);
+    if (JSON.stringify(logRows) !== JSON.stringify(cached)) {
+      renderActivityTable(logRows);
+    }
+    _actLoaded = true;
   } catch(e) {
-    const el = document.getElementById("activity-main");
-    if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load activity: ${e.message}</div>`;
+    if (!cached) {
+      const el = document.getElementById("activity-main");
+      if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load activity: ${e.message}</div>`;
+    }
   }
 }
 
+async function _bgRefreshActivity() {
+  try {
+    const [logRows, statusRows] = await Promise.all([
+      readSheet(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME).catch(() => []),
+      readSheet(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME).catch(() => [])
+    ]);
+    window._accountStatus = rowsToAccountStatus(statusRows);
+    const prev = _sGet(ACT_CACHE_KEY);
+    _sSet(ACT_CACHE_KEY, logRows);
+    if (JSON.stringify(logRows) !== JSON.stringify(prev)) renderActivityTable(logRows);
+  } catch {}
+}
+
 async function unlockAccount(name) {
+  _sDel(ACT_CACHE_KEY); _actLoaded = false;
   await resetAccountStatus(name);
   showToast(`${name.split(" ")[0]}'s account unlocked`);
   loadActivityLog();
@@ -1235,6 +1490,19 @@ function renderActivityTable(logRows) {
     </div>` : "";
 
   const dataRows = logRows.length > 1 ? logRows.slice(1).reverse() : [];
+  const purgeHTML = `
+    <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:13px;font-weight:600;color:#374151;">Purge logs older than</span>
+      <input id="purge-days" type="number" min="1" max="365" value="30"
+        style="width:68px;padding:6px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;text-align:center;"/>
+      <span style="font-size:13px;color:#374151;">days</span>
+      <button onclick="purgeActivityLog()"
+        style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">
+        🗑 Purge
+      </button>
+      <span id="purge-status" style="font-size:12px;color:#9ca3af;"></span>
+    </div>`;
+
   const logHTML = `
     <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #d1fae5;">
@@ -1260,12 +1528,419 @@ function renderActivityTable(logRows) {
           </div>`}
     </div>`;
 
-  el.innerHTML = lockedHTML + logHTML;
+  el.innerHTML = lockedHTML + purgeHTML + logHTML;
 }
 
 function roleBadge(role) {
   const s = role === "Manager" ? "background:#dbeafe;color:#1e40af" : "background:#dcfce7;color:#166534";
   return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;${s}">${role}</span>`;
+}
+
+async function purgeActivityLog() {
+  const daysEl  = document.getElementById("purge-days");
+  const statusEl = document.getElementById("purge-status");
+  const days    = parseInt(daysEl?.value);
+  if (!days || days < 1) { if (statusEl) statusEl.textContent = "Enter a valid number of days."; return; }
+  if (!confirm(`Permanently delete all login records older than ${days} day${days!==1?"s":""}?`)) return;
+
+  if (statusEl) statusEl.textContent = "Working…";
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME);
+    if (rows.length < 2) { if (statusEl) statusEl.textContent = "No records to purge."; return; }
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setHours(0, 0, 0, 0);
+
+    const toDelete = [];
+    rows.slice(1).forEach((r, i) => {
+      const dt = r[0] ? new Date(r[0]) : null;
+      if (dt && !isNaN(dt) && dt < cutoff) toDelete.push(i + 2);
+    });
+
+    if (!toDelete.length) {
+      if (statusEl) statusEl.textContent = `No records older than ${days} days found.`;
+      return;
+    }
+
+    toDelete.sort((a, b) => b - a);
+    for (const rowIndex of toDelete) {
+      await deleteRowProxy(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, rowIndex);
+    }
+
+    _sDel(ACT_CACHE_KEY); _actLoaded = false;
+    await loadActivityLog();
+    showToast(`Purged ${toDelete.length} record${toDelete.length!==1?"s":""} ✓`);
+  } catch(e) { alert("Purge failed: " + e.message); }
+}
+
+// ── TEAM LINKS ─────────────────────────────────────────────────────────────────
+let _allLinks    = [];
+let _linkModal   = null;
+
+const LINKS_CACHE_KEY = "tmgr_links";
+let _linksLoaded = false;
+
+function rowsToLinks(rows) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2,
+    linkId: r[0] || "",
+    team:   r[1] || "All",
+    title:  r[2] || "",
+    url:    r[3] || "",
+    desc:   r[4] || ""
+  })).filter(l => l.title && l.url);
+}
+
+function renderLinks() {
+  document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
+    tabBarHTML() + `<div id="links-main"></div>`);
+  if (_linksLoaded) {
+    renderLinksView();
+    _bgRefreshLinks();
+  } else {
+    document.getElementById("links-main").innerHTML = `<div class="spinner"></div>`;
+    loadTeamLinks();
+  }
+}
+
+async function loadTeamLinks() {
+  const cached = _sGet(LINKS_CACHE_KEY);
+  if (cached) {
+    _allLinks   = cached;
+    _linksLoaded = true;
+    renderLinksView();
+  }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TEAM_LINKS_SHEET_NAME);
+    const fresh = rowsToLinks(rows);
+    _sSet(LINKS_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_allLinks)) {
+      _allLinks = fresh;
+      renderLinksView();
+    }
+    _linksLoaded = true;
+  } catch {
+    _allLinks = cached || [];
+    _linksLoaded = true;
+    renderLinksView();
+  }
+}
+
+async function _bgRefreshLinks() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TEAM_LINKS_SHEET_NAME);
+    const fresh = rowsToLinks(rows);
+    _sSet(LINKS_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_allLinks)) {
+      _allLinks = fresh;
+      renderLinksView();
+    }
+  } catch {}
+}
+
+function renderLinksView() {
+  const el = document.getElementById("links-main");
+  if (!el) return;
+  const isManager = SESSION.role === "Manager";
+  const myTeams   = SESSION.teams || [];
+  const visible   = isManager
+    ? [..._allLinks].sort((a,b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title))
+    : _allLinks.filter(l => l.team === "All" || myTeams.includes(l.team))
+               .sort((a,b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title));
+
+  const addBtn = isManager
+    ? `<button onclick="openLinkModal('add')" style="padding:8px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;margin-bottom:14px;">+ Add Link</button>`
+    : "";
+
+  if (!visible.length) {
+    el.innerHTML = addBtn + `<div style="text-align:center;padding:3rem;color:#9ca3af;">No links yet${isManager?"":" for your team"}.</div>`;
+    return;
+  }
+
+  let lastTeam = null;
+  const rows = visible.map((l, i) => {
+    const tc = teamColor(l.team);
+    const teamCell = l.team !== lastTeam
+      ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};white-space:nowrap;">${l.team}</span>`
+      : `<span style="font-size:10px;color:#d1fae5;">↓</span>`;
+    lastTeam = l.team;
+    const rowBg = i % 2 === 0 ? "#fff" : "#fafafa";
+    return `<tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+      <td style="padding:8px 10px;white-space:nowrap;">${teamCell}</td>
+      <td style="padding:8px 12px;">
+        <div style="font-size:13px;font-weight:600;color:#1b4332;">${l.title}</div>
+        ${l.desc ? `<div style="font-size:11px;color:#9ca3af;margin-top:1px;">${l.desc}</div>` : ""}
+      </td>
+      <td style="padding:8px 10px;white-space:nowrap;">
+        <a href="${l.url}" target="_blank" rel="noopener"
+          style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:4px 10px;border-radius:6px;text-decoration:none;">
+          Open →
+        </a>
+      </td>
+      ${isManager ? `<td style="padding:8px 10px;white-space:nowrap;">
+        <button onclick="openLinkModal('edit',${l.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:none;cursor:pointer;">Edit</button>
+        <button onclick="deleteLink(${l.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:none;cursor:pointer;margin-left:4px;">Del</button>
+      </td>` : ""}
+    </tr>`;
+  }).join("");
+
+  el.innerHTML = addBtn + `
+    <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;background:#f9fafb;">
+        <span style="font-size:13px;font-weight:700;color:#1b4332;">Links</span>
+        <span style="font-size:12px;color:#9ca3af;">${visible.length} link${visible.length!==1?"s":""}</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <thead>
+            <tr style="background:#f0fdf4;">
+              <th style="padding:8px 10px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;white-space:nowrap;">Team</th>
+              <th style="padding:8px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;">Title / Description</th>
+              <th style="padding:8px 10px;border-bottom:2px solid #d1fae5;"></th>
+              ${isManager ? `<th style="padding:8px 10px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;">Actions</th>` : ""}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function openLinkModal(mode, rowIndex) {
+  const existing = mode === "edit" ? _allLinks.find(l => l.rowIndex === rowIndex) : null;
+  _linkModal = existing ? { mode:"edit", ...existing } : { mode:"add", linkId:"", team:"All", title:"", url:"", desc:"", rowIndex:null };
+  renderLinkModal();
+}
+
+function renderLinkModal() {
+  const existing = document.getElementById("link-modal");
+  if (existing) existing.remove();
+  const m = _linkModal; if (!m) return;
+  const isEdit  = m.mode === "edit";
+  const F       = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
+  const teams   = ["All", ...(SESSION.teams || [])];
+  const teamOpts = teams.map(t => `<option value="${t}"${t===m.team?" selected":""}>${t}</option>`).join("");
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="link-modal" onclick="if(event.target===this)closeLinkModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:16px;">${isEdit?"Edit":"Add"} Link</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Visible To</label>
+        <select id="lm-team" style="${F} margin-bottom:14px;">${teamOpts}</select>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Title *</label>
+        <input id="lm-title" value="${m.title.replace(/"/g,"&quot;")}" placeholder="e.g. Workday Training Guide"
+          style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">URL *</label>
+        <input id="lm-url" type="url" value="${m.url.replace(/"/g,"&quot;")}" placeholder="https://..."
+          style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Description</label>
+        <input id="lm-desc" value="${(m.desc||"").replace(/"/g,"&quot;")}" placeholder="Optional description"
+          style="${F} margin-bottom:14px;"/>
+
+        <div id="lm-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${isEdit?`<button onclick="deleteLink(${m.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">Delete</button>`:""}
+          <div style="flex:1;"></div>
+          <button onclick="closeLinkModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button onclick="doSaveLink()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>`);
+  document.getElementById("lm-title").focus();
+}
+
+function closeLinkModal() {
+  _linkModal = null;
+  const el = document.getElementById("link-modal");
+  if (el) el.remove();
+}
+
+function nextLinkId(links) {
+  const nums = links.map(l => parseInt((l.linkId||"").replace("LNK-",""),10)).filter(n=>!isNaN(n));
+  return "LNK-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3,"0");
+}
+
+async function doSaveLink() {
+  const team  = document.getElementById("lm-team").value;
+  const title = document.getElementById("lm-title").value.trim();
+  const url   = document.getElementById("lm-url").value.trim();
+  const desc  = document.getElementById("lm-desc").value.trim();
+  const m     = _linkModal;
+  const errEl = document.getElementById("lm-error");
+  if (!title) { errEl.textContent = "Title is required."; return; }
+  if (!url)   { errEl.textContent = "URL is required."; return; }
+  try {
+    if (m.mode === "add") {
+      await appendRow(CALENDAR_SHEET_ID, TEAM_LINKS_SHEET_NAME, [nextLinkId(_allLinks), team, title, url, desc]);
+    } else {
+      await updateRow(CALENDAR_SHEET_ID, TEAM_LINKS_SHEET_NAME, m.rowIndex, [m.linkId, team, title, url, desc]);
+    }
+    closeLinkModal();
+    _sDel(LINKS_CACHE_KEY); _linksLoaded = false;
+    await loadTeamLinks();
+    showToast("Saved ✓");
+  } catch(e) { errEl.textContent = "Save failed: " + e.message; }
+}
+
+async function deleteLink(rowIndex) {
+  const l = _allLinks.find(l => l.rowIndex === rowIndex);
+  if (!l || !confirm(`Delete "${l.title}"?`)) return;
+  closeLinkModal();
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, TEAM_LINKS_SHEET_NAME, rowIndex);
+    _sDel(LINKS_CACHE_KEY); _linksLoaded = false;
+    await loadTeamLinks();
+    showToast("Deleted");
+  } catch(e) { alert("Delete failed: " + e.message); }
+}
+
+// ── TEAM DIRECTORY ─────────────────────────────────────────────────────────────
+function renderDirectory() {
+  document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
+    tabBarHTML() + `<div id="directory-main"></div>`);
+  renderDirectoryCards();
+}
+
+function renderDirectoryCards() {
+  const el = document.getElementById("directory-main");
+  if (!el) return;
+  const people = (window._configRows || []).filter(r => r[0]);
+  if (!people.length) {
+    el.innerHTML = `<div style="text-align:center;padding:3rem;color:#9ca3af;">No team members found.</div>`;
+    return;
+  }
+
+  const cards = people.map(r => {
+    const name     = r[0] || "";
+    const role     = r[2] || "";
+    const email    = r[3] || "";
+    const phone    = r[4] || "";
+    const title    = r[5] || "";
+    const personTeams = (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const initials = name.split(" ").map(n => n[0]||"").join("").slice(0,2).toUpperCase();
+    const bg       = memberColor(name);
+    const canEdit  = SESSION.role === "Manager" || name === SESSION.name;
+    const teamBadges = personTeams.map(t => {
+      const tc = teamColor(t);
+      return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};">${t}</span>`;
+    }).join("");
+
+    return `<div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;padding:1.5rem;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;">
+      <div style="width:62px;height:62px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;flex-shrink:0;letter-spacing:-1px;">
+        ${initials}
+      </div>
+      <div>
+        <div style="font-size:15px;font-weight:700;color:#1b4332;">${name}</div>
+        ${title ? `<div style="font-size:12px;color:#6b7280;margin-top:3px;">${title}</div>` : ""}
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">${roleBadge(role)}${teamBadges}</div>
+      ${(email||phone) ? `
+        <div style="width:100%;border-top:1px solid #f0fdf4;padding-top:10px;display:flex;flex-direction:column;gap:7px;align-items:flex-start;">
+          ${email ? `<a href="mailto:${email}" title="${email}"
+            style="font-size:12px;color:#1b4332;text-decoration:none;display:flex;align-items:center;gap:7px;width:100%;overflow:hidden;">
+            <span style="flex-shrink:0;font-size:14px;">✉</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${email}</span>
+          </a>` : ""}
+          ${phone ? `<a href="tel:${phone.replace(/\s/g,"")}"
+            style="font-size:12px;color:#1b4332;text-decoration:none;display:flex;align-items:center;gap:7px;">
+            <span style="flex-shrink:0;font-size:14px;">📞</span>${phone}
+          </a>` : ""}
+        </div>` : `<div style="font-size:11px;color:#9ca3af;padding-top:2px;">No contact info yet</div>`}
+      ${canEdit ? `<button onclick="openDirEditModal('${name.replace(/'/g,"&#39;")}')"
+        style="width:100%;padding:6px;border-radius:8px;background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;border:1px solid #d1fae5;cursor:pointer;margin-top:2px;">
+        ✎ ${name === SESSION.name ? "Edit My Profile" : "Edit Profile"}
+      </button>` : ""}
+    </div>`;
+  });
+
+  el.innerHTML = `
+    <div style="font-size:13px;color:#9ca3af;margin-bottom:16px;">${people.length} team member${people.length!==1?"s":""}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;">
+      ${cards.join("")}
+    </div>`;
+}
+
+let _dirEditName = null;
+
+function openDirEditModal(name) {
+  _dirEditName = name;
+  const r     = (window._configRows || []).find(r => r[0] === name) || [];
+  const email = r[3] || "";
+  const phone = r[4] || "";
+  const title = r[5] || "";
+  const existing = document.getElementById("dir-edit-modal");
+  if (existing) existing.remove();
+  const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="dir-edit-modal" onclick="if(event.target===this)closeDirEditModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:4px;">Edit Profile</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:18px;">${name}</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Job Title</label>
+        <input id="de-title" value="${title.replace(/"/g,"&quot;")}" placeholder="e.g. Senior Engineer"
+          style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Email</label>
+        <input id="de-email" type="email" value="${email.replace(/"/g,"&quot;")}" placeholder="name@company.com"
+          style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Phone</label>
+        <input id="de-phone" value="${phone.replace(/"/g,"&quot;")}" placeholder="e.g. +1 555 123 4567"
+          style="${F} margin-bottom:14px;"/>
+
+        <div id="de-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="closeDirEditModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button id="de-save-btn" onclick="doSaveDirEdit()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>`);
+  document.getElementById("de-title").focus();
+}
+
+function closeDirEditModal() {
+  _dirEditName = null;
+  const el = document.getElementById("dir-edit-modal");
+  if (el) el.remove();
+}
+
+async function doSaveDirEdit() {
+  const name   = _dirEditName;
+  const title  = document.getElementById("de-title").value.trim();
+  const email  = document.getElementById("de-email").value.trim();
+  const phone  = document.getElementById("de-phone").value.trim();
+  const errEl  = document.getElementById("de-error");
+  const btnEl  = document.getElementById("de-save-btn");
+  errEl.textContent = "";
+  btnEl.disabled = true; btnEl.textContent = "Saving…";
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME);
+    const idx  = rows.slice(1).findIndex(r => r[0] === name);
+    if (idx < 0) throw new Error("User not found in Config.");
+    const existing = rows[idx + 1];
+    await updateRow(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME, idx + 2,
+      [existing[0], existing[1], existing[2], email, phone, title]);
+    window._configRows = window._configRows.map(r =>
+      r[0] === name ? [r[0], r[1], r[2], email, phone, title] : r
+    );
+    closeDirEditModal();
+    renderDirectoryCards();
+    showToast("Profile updated ✓");
+  } catch(e) {
+    errEl.textContent = "Save failed: " + e.message;
+    btnEl.disabled = false; btnEl.textContent = "Save";
+  }
 }
 
 // ── CHANGE PIN ─────────────────────────────────────────────────────────────────
@@ -1349,6 +2024,69 @@ async function doChangePin() {
     errEl.textContent = "Failed to update PIN: " + e.message;
     btnEl.disabled = false; btnEl.textContent = "Update PIN";
   }
+}
+
+// ── VIEW AS (PROXY LOGIN) ──────────────────────────────────────────────────────
+function openViewAsModal() {
+  const existing = document.getElementById("viewas-modal");
+  if (existing) existing.remove();
+  const members = _proxySession
+    ? (_proxySession.memberRows || [])
+    : (SESSION.memberRows || []);
+  const cards = members.map(r => {
+    const name     = r[0] || "";
+    const title    = r[5] || "";
+    const teams    = (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const initials = name.split(" ").map(n=>n[0]||"").join("").slice(0,2).toUpperCase();
+    const tc = teamColor(teams[0] || "");
+    const teamBadges = teams.map(t => `<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;background:${teamColor(t).bg};color:${teamColor(t).color};border:1px solid ${teamColor(t).border};">${t}</span>`).join(" ");
+    return `<div onclick="viewAsMember('${name.replace(/'/g,"&#39;")}')"
+      style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;cursor:pointer;border:1px solid #e5e7eb;background:#fff;"
+      onmouseover="this.style.background='#f0fdf4';this.style.borderColor='#1b4332'"
+      onmouseout="this.style.background='#fff';this.style.borderColor='#e5e7eb'">
+      <div style="width:38px;height:38px;border-radius:50%;background:${memberColor(name)};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0;">${initials}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:700;color:#1b4332;">${name}</div>
+        ${title ? `<div style="font-size:11px;color:#9ca3af;">${title}</div>` : ""}
+        ${teamBadges ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;">${teamBadges}</div>` : ""}
+      </div>
+      <span style="font-size:11px;color:#9ca3af;">→</span>
+    </div>`;
+  }).join("");
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="viewas-modal" onclick="if(event.target===this)closeViewAsModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.25);max-height:85vh;overflow-y:auto;">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:4px;">View As</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:16px;">Select a team member to preview their experience</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">${cards}</div>
+        <button onclick="closeViewAsModal()" style="width:100%;margin-top:16px;padding:8px;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:12px;font-weight:600;border:1px solid #e5e7eb;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`);
+}
+
+function closeViewAsModal() {
+  const el = document.getElementById("viewas-modal");
+  if (el) el.remove();
+}
+
+function viewAsMember(name) {
+  closeViewAsModal();
+  _proxySession = SESSION;
+  const r = (window._configRows || []).find(r => r[0] === name) || [];
+  const parseTeams = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
+  SESSION = { name, role: "Member", teams: parseTeams(r[6]) };
+  _activeTab = "tasks";
+  render();
+}
+
+function returnToManager() {
+  SESSION = _proxySession;
+  _proxySession = null;
+  _activeTab = "tasks";
+  render();
 }
 
 // ── BOOT ───────────────────────────────────────────────────────────────────────
