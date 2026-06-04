@@ -391,10 +391,20 @@ function _sGet(k)    { try { return JSON.parse(sessionStorage.getItem(k) || "nul
 function _sSet(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} }
 function _sDel(k)    { try { sessionStorage.removeItem(k); } catch {} }
 
+const TASKS_TTL_MS = 60 * 60 * 1000; // 1 hour
 function _tasksCacheKey() { return "tmgr_tasks_" + (SESSION ? SESSION.name : ""); }
-function getCachedTasks()      { return _sGet(_tasksCacheKey()); }
-function setCachedTasks(tasks) { _sSet(_tasksCacheKey(), tasks); }
-function clearTasksCache()     { _sDel(_tasksCacheKey()); }
+function getCachedTasks() {
+  try {
+    const item = JSON.parse(localStorage.getItem(_tasksCacheKey()) || "null");
+    if (!item) return null;
+    if (Date.now() - item.ts > TASKS_TTL_MS) { localStorage.removeItem(_tasksCacheKey()); return null; }
+    return item.data;
+  } catch { return null; }
+}
+function setCachedTasks(tasks) {
+  try { localStorage.setItem(_tasksCacheKey(), JSON.stringify({ ts: Date.now(), data: tasks })); } catch {}
+}
+function clearTasksCache() { try { localStorage.removeItem(_tasksCacheKey()); } catch {} }
 
 const CAL_CACHE_KEY = "tmgr_cal";
 const ACT_CACHE_KEY = "tmgr_act";
@@ -413,8 +423,15 @@ function renderMember() {
     renderMemberTable();
     _bgRefreshMemberTasks();
   } else {
-    document.getElementById("member-main").innerHTML = `<div class="spinner"></div>`;
-    loadMemberTasks();
+    const cached = getCachedTasks();
+    if (cached) {
+      _memberTasks = cached.filter(t => t.assignedTo === SESSION.name);
+      renderMemberTable();
+      _bgRefreshMemberTasks();
+    } else {
+      document.getElementById("member-main").innerHTML = `<div class="spinner"></div>`;
+      loadMemberTasks();
+    }
   }
 }
 
@@ -550,8 +567,16 @@ function renderManager() {
     renderManagerTable();
     _bgRefreshAllTasks();
   } else {
-    document.getElementById("manager-main").innerHTML = `<div class="spinner"></div>`;
-    loadAllTasks();
+    const cached = getCachedTasks();
+    if (cached) {
+      _allTasks = cached;
+      _filterMember = "All";
+      renderManagerTable();
+      _bgRefreshAllTasks();
+    } else {
+      document.getElementById("manager-main").innerHTML = `<div class="spinner"></div>`;
+      loadAllTasks();
+    }
   }
 }
 
