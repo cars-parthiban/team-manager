@@ -378,7 +378,6 @@ function shellHTML(roleLabel, userName, mainContent) {
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:13px;color:#95d5b2;">${userName}</span>
-          <button onclick="refreshView()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;border-radius:8px;padding:5px 10px;font-size:16px;">↻</button>
           ${viewAsBtn}
           <button onclick="openChangePinModal()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">Change PIN</button>
           <button onclick="signOut()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;">Sign Out</button>
@@ -390,10 +389,13 @@ function shellHTML(roleLabel, userName, mainContent) {
 
 function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; render(); }
 function refreshView() {
+  // Clear disk cache so next background fetch pulls fresh data
   clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents");
-  _allTasks = []; _memberTasks = []; _calEvents = []; _allLinks = []; _teamEvents = [];
+  // Reset loaded flags so tabs re-fetch on next visit
   _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false;
+  // Keep in-memory data — render is instant, background refresh updates silently
   render();
+  showToast("Refreshing in background…");
 }
 
 function _sGet(k)    { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch { return null; } }
@@ -452,15 +454,12 @@ async function loadMemberTasks() {
     renderMemberTable();
   }
   try {
-    const rows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
-    const all  = rowsToTasks(rows);
+    const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const all   = rowsToTasks(rows);
     setCachedTasks(all);
-    const fresh = all.filter(t => t.assignedTo === SESSION.name);
-    if (JSON.stringify(fresh) !== JSON.stringify(_memberTasks)) {
-      _memberTasks = fresh;
-      _memberEditingTask = null;
-      renderMemberTable();
-    }
+    _memberTasks = all.filter(t => t.assignedTo === SESSION.name);
+    _memberEditingTask = null;
+    renderMemberTable(); // always render — clears spinner even when task list is empty
   } catch(e) {
     if (!cached) document.getElementById("member-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
       <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
@@ -603,14 +602,11 @@ async function loadAllTasks() {
   }
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
-    const fresh = rowsToTasks(rows);
-    setCachedTasks(fresh);
-    if (JSON.stringify(fresh) !== JSON.stringify(_allTasks)) {
-      _allTasks = fresh;
-      _filterMember = "All";
-      _editingTask = null;
-      renderManagerTable();
-    }
+    _allTasks   = rowsToTasks(rows);
+    setCachedTasks(_allTasks);
+    _filterMember = "All";
+    _editingTask  = null;
+    renderManagerTable(); // always render — clears spinner even when task list is empty
   } catch(e) {
     if (!cached) document.getElementById("manager-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
       <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
