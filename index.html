@@ -495,6 +495,76 @@ async function _bgRefreshMemberTasks() {
   } catch {}
 }
 
+function taskViewToggleHTML() {
+  return `<div style="display:flex;background:#f0fdf4;border-radius:7px;padding:2px;border:1px solid #d1fae5;">
+    <button onclick="setTaskView('grid')"  style="padding:4px 12px;border-radius:5px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${_taskView==='grid'?'#1b4332':'transparent'};color:${_taskView==='grid'?'#fff':'#6b7280'};">Grid</button>
+    <button onclick="setTaskView('board')" style="padding:4px 12px;border-radius:5px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${_taskView==='board'?'#1b4332':'transparent'};color:${_taskView==='board'?'#fff':'#6b7280'};">Board</button>
+  </div>`;
+}
+
+function setTaskView(v) {
+  _taskView = v;
+  if (SESSION.role === "Manager") renderManagerTable();
+  else renderMemberTable();
+}
+
+function renderTaskBoard(tasks, isManager) {
+  const COLS = [
+    { key: "Not Started", bg: "#f1f5f9", color: "#475569", border: "#e2e8f0" },
+    { key: "In Progress", bg: "#dbeafe", color: "#1e40af", border: "#bfdbfe" },
+    { key: "Completed",   bg: "#dcfce7", color: "#166534", border: "#bbf7d0" }
+  ];
+
+  const columns = COLS.map(col => {
+    const colTasks = tasks.filter(t => t.status === col.key);
+    const cards = colTasks.map(t => {
+      const ov          = isOverdue(t.dueDate) && t.status !== "Completed";
+      const leftBorder  = t.priority === "High" ? "#dc2626" : t.priority === "Low" ? "#16a34a" : "#f59e0b";
+      const deleteFn    = isManager ? `doDelete(${t.rowIndex})` : `memberDeleteTask(${t.rowIndex})`;
+      const assignedRow = isManager
+        ? `<div style="font-size:10px;font-weight:600;color:#6b7280;margin-bottom:3px;">${t.assignedTo.split(" ")[0]}</div>`
+        : "";
+      const dueRow  = t.dueDate
+        ? `<div style="font-size:11px;color:${ov?"#dc2626":"#6b7280"};font-weight:${ov?600:400};margin-top:5px;">📅 ${formatDueDate(t.dueDate)}${ov?" · Overdue":""}</div>`
+        : "";
+      const notesRow = t.notes
+        ? `<div style="font-size:11px;color:#9ca3af;margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;">${t.notes.slice(0,100)}</div>`
+        : "";
+      const urlBtn = t.url
+        ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="display:inline-block;font-size:10px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:2px 7px;border-radius:4px;text-decoration:none;margin-top:5px;">🔗 Open</a>`
+        : "";
+      return `<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;border-left:3px solid ${leftBorder};padding:10px 12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:2px;">
+          <div style="flex:1;min-width:0;">
+            ${assignedRow}
+            <div style="font-size:12px;font-weight:600;color:#111827;line-height:1.4;word-break:break-word;">${t.task}</div>
+          </div>
+          ${priorityBadge(t.priority)}
+        </div>
+        <div style="font-size:10px;color:#9ca3af;">${t.taskId}</div>
+        ${dueRow}${notesRow}${urlBtn}
+        <div style="display:flex;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid #f3f4f6;">
+          <button onclick="openEditTaskModal(${t.rowIndex})" style="flex:1;background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:4px 6px;border-radius:5px;border:none;cursor:pointer;">Edit</button>
+          <button onclick="doArchiveTask(${t.rowIndex})" style="flex:1;background:#fef9c3;color:#854d0e;font-size:11px;font-weight:600;padding:4px 6px;border-radius:5px;border:none;cursor:pointer;">Archive</button>
+          <button onclick="${deleteFn}" style="flex:1;background:#fff1f2;color:#dc2626;font-size:11px;font-weight:600;padding:4px 6px;border-radius:5px;border:none;cursor:pointer;">Delete</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    return `<div style="flex:1;min-width:240px;max-width:400px;">
+      <div style="background:${col.bg};border:1px solid ${col.border};border-radius:10px 10px 0 0;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:13px;font-weight:700;color:${col.color};">${col.key}</span>
+        <span style="font-size:11px;font-weight:600;background:rgba(0,0,0,0.08);color:${col.color};padding:2px 8px;border-radius:999px;">${colTasks.length}</span>
+      </div>
+      <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:100px;background:#fafafa;">
+        ${cards || '<div style="text-align:center;color:#d1d5db;font-size:12px;padding:24px 0;">No tasks</div>'}
+      </div>
+    </div>`;
+  }).join("");
+
+  return `<div style="display:flex;gap:14px;overflow-x:auto;align-items:flex-start;padding-bottom:8px;">${columns}</div>`;
+}
+
 function renderMemberTable() {
   const tasks = _memberTasks;
   const total = tasks.length;
@@ -509,10 +579,18 @@ function renderMemberTable() {
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">${l}</div></div>`).join("")}
     </div>`;
 
-  const addBtn = `<button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;margin-bottom:16px;">+ Add Task</button>`;
+  const addRow = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
+    ${taskViewToggleHTML()}
+  </div>`;
+
+  if (_taskView === "board") {
+    document.getElementById("member-main").innerHTML = statsHTML + addRow + renderTaskBoard(tasks, false);
+    return;
+  }
 
   const bodyRows = tasks.length === 0
-    ? `<tr><td colspan="7" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks yet.</td></tr>`
+    ? `<tr><td colspan="8" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks yet.</td></tr>`
     : tasks.map(t => {
         const ov = isOverdue(t.dueDate) && t.status !== "Completed";
         return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
@@ -535,7 +613,7 @@ function renderMemberTable() {
           </td></tr>`;
       }).join("");
 
-  document.getElementById("member-main").innerHTML = statsHTML + addBtn + `
+  document.getElementById("member-main").innerHTML = statsHTML + addRow + `
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
@@ -587,6 +665,7 @@ let _filterMember = "All";
 let _editingTask = null;
 let _addTaskMembers = new Set();
 let _selectedTaskRows = new Set();
+let _taskView = "grid";
 
 function renderManager() {
   if (_activeTab === "calendar")   { renderCalendar();     return; }
@@ -667,13 +746,25 @@ function renderManagerTable(showAddForm) {
     ? `<button onclick="setFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
     : "";
 
-  const deleteSelBtn = _selectedTaskRows.size > 0
-    ? `<button onclick="deleteSelectedTasks()" style="padding:9px 18px;border-radius:8px;background:#dc2626;color:#fff;font-size:13px;font-weight:600;border:none;margin-bottom:20px;margin-left:8px;">Delete Selected (${_selectedTaskRows.size})</button>`
+  const deleteSelBtn = _taskView === "grid" && _selectedTaskRows.size > 0
+    ? `<button onclick="deleteSelectedTasks()" style="padding:9px 18px;border-radius:8px;background:#dc2626;color:#fff;font-size:13px;font-weight:600;border:none;margin-left:8px;">Delete Selected (${_selectedTaskRows.size})</button>`
     : "";
-  const addBtn = `<div style="display:inline-flex;align-items:center;gap:8px;margin-bottom:20px;">
-    <button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
-    ${deleteSelBtn}
+  const addBtn = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
+    <div style="display:inline-flex;align-items:center;gap:8px;">
+      <button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
+      ${deleteSelBtn}
+    </div>
+    <div style="flex:1;"></div>
+    ${taskViewToggleHTML()}
   </div>`;
+
+  if (_taskView === "board") {
+    document.getElementById("manager-main").innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">${filterBtns}${clearBtn}</div>
+      ${addBtn}
+      ${renderTaskBoard(filtered, true)}`;
+    return;
+  }
 
   const IS = "font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;";
   const allChecked = filtered.length > 0 && filtered.every(t => _selectedTaskRows.has(t.rowIndex));
@@ -709,7 +800,7 @@ function renderManagerTable(showAddForm) {
 
   document.getElementById("manager-main").innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">${filterBtns}${clearBtn}</div>
-    <div>${addBtn}</div>
+    ${addBtn}
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
