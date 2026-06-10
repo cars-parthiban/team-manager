@@ -43,6 +43,7 @@ const LOGIN_LOG_SHEET_NAME      = "Login_Log";
 const ACCOUNT_STATUS_SHEET_NAME = "Account_Status";
 const TEAM_LINKS_SHEET_NAME     = "Team_Links";
 const TEAM_EVENTS_SHEET_NAME    = "Team_Events";
+const ARCHIVE_SHEET_NAME        = "Archive";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -76,6 +77,16 @@ function rowsToTasks(rows) {
     taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
     dueDate: r[3]||"", priority: r[4]||"Medium",
     status: r[5]||"Not Started", notes: r[6]||"", url: r[7]||""
+  }));
+}
+function rowsToArchiveTasks(rows) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2,
+    taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
+    dueDate: r[3]||"", priority: r[4]||"Medium",
+    status: r[5]||"", notes: r[6]||"", url: r[7]||"",
+    archivedDate: r[8]||""
   }));
 }
 function normalizeUrl(url) {
@@ -390,9 +401,9 @@ function shellHTML(roleLabel, userName, mainContent) {
 function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; render(); }
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
-  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents");
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY);
   // Reset loaded flags so tabs re-fetch on next visit
-  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false;
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false;
   // Keep in-memory data — render is instant, background refresh updates silently
   render();
   showToast("Refreshing in background…");
@@ -417,8 +428,9 @@ function setCachedTasks(tasks) {
 }
 function clearTasksCache() { try { localStorage.removeItem(_tasksCacheKey()); } catch {} }
 
-const CAL_CACHE_KEY = "tmgr_cal";
-const ACT_CACHE_KEY = "tmgr_act";
+const CAL_CACHE_KEY     = "tmgr_cal";
+const ACT_CACHE_KEY     = "tmgr_act";
+const ARCHIVE_CACHE_KEY = "tmgr_archive";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
@@ -429,6 +441,7 @@ function renderMember() {
   if (_activeTab === "links")      { renderLinks();        return; }
   if (_activeTab === "events")     { renderTeamEvents();   return; }
   if (_activeTab === "directory")  { renderDirectory();    return; }
+  if (_activeTab === "archive")    { renderArchive();      return; }
   document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, tabBarHTML() + `<div id="member-main"></div>`);
   if (_memberTasks.length > 0) {
     renderMemberTable();
@@ -517,6 +530,7 @@ function renderMemberTable() {
           </td>
           <td style="padding:10px 12px;white-space:nowrap;">
             <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
+            <button onclick="doArchiveTask(${t.rowIndex})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Archive</button>
             <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
           </td></tr>`;
       }).join("");
@@ -561,6 +575,12 @@ async function memberAddTask() {
   } catch(e) { alert("Failed to add task: " + e.message); }
 }
 
+// ── ARCHIVE STATE ──────────────────────────────────────────────────────────────
+let _archiveTasks = [];
+let _archiveLoaded = false;
+let _archiveSearch = "";
+let _archiveFilterMember = "All";
+
 // ── MANAGER VIEW ───────────────────────────────────────────────────────────────
 let _allTasks = [];
 let _filterMember = "All";
@@ -574,6 +594,7 @@ function renderManager() {
   if (_activeTab === "links")      { renderLinks();        return; }
   if (_activeTab === "events")     { renderTeamEvents();   return; }
   if (_activeTab === "directory")  { renderDirectory();    return; }
+  if (_activeTab === "archive")    { renderArchive();      return; }
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
   if (_allTasks.length > 0) {
     renderManagerTable();
@@ -681,6 +702,7 @@ function renderManagerTable(showAddForm) {
           </td>
           <td style="padding:10px 12px;white-space:nowrap;">
             <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
+            <button onclick="doArchiveTask(${ri})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Archive</button>
             <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
           </td></tr>`;
       }).join("");
@@ -1002,6 +1024,7 @@ function tabBarHTML() {
   if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
   if (SESSION.role === "Manager") tabs.push(["activity","Activity"]);
+  tabs.push(["archive","Archive"]);
   return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
     tabs.map(([id,label]) => {
       const a = _activeTab === id;
@@ -2500,6 +2523,196 @@ async function doDeleteTeamEvent(rowIndex) {
     await reloadTeamEvents();
     showToast("Deleted");
   } catch(e) { alert("Delete failed: " + e.message); }
+}
+
+// ── ARCHIVE ────────────────────────────────────────────────────────────────────
+async function doArchiveTask(rowIndex) {
+  const isManager = SESSION.role === "Manager";
+  const task = isManager
+    ? _allTasks.find(t => t.rowIndex === rowIndex)
+    : _memberTasks.find(t => t.rowIndex === rowIndex);
+  if (!task) return;
+  if (!confirm(`Archive "${task.task}"?\n\nThis will move the task to the Archive tab where you can search it later.`)) return;
+  try {
+    const today = new Date();
+    const archivedDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    await appendRow(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME,
+      [task.taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url, archivedDate]);
+    await deleteRowProxy(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex);
+    _sDel(ARCHIVE_CACHE_KEY);
+    _archiveLoaded = false;
+    if (isManager) await reloadAllTasks();
+    else await loadMemberTasks();
+    showToast("Archived ✓");
+  } catch(e) {
+    if (e.message && e.message.toLowerCase().includes("sheet")) {
+      alert(`Archive failed: The "Archive" sheet does not exist in your Google Spreadsheet.\n\nPlease create a sheet named "Archive" in your spreadsheet and try again.`);
+    } else {
+      alert("Archive failed: " + e.message);
+    }
+  }
+}
+
+async function doUnarchiveTask(rowIndex) {
+  const task = _archiveTasks.find(t => t.rowIndex === rowIndex);
+  if (!task) return;
+  if (!confirm(`Unarchive "${task.task}"?\n\nThis will move the task back to the active Tasks tab.`)) return;
+  try {
+    const allRows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    const taskId  = nextTaskId(rowsToTasks(allRows));
+    await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME,
+      [taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url]);
+    await deleteRowProxy(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME, rowIndex);
+    _sDel(ARCHIVE_CACHE_KEY);
+    _archiveLoaded = false;
+    clearTasksCache();
+    _allTasks = [];
+    _memberTasks = [];
+    await loadArchiveTasks();
+    showToast("Unarchived ✓");
+  } catch(e) { alert("Unarchive failed: " + e.message); }
+}
+
+function renderArchive() {
+  document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
+    tabBarHTML() + `<div id="archive-main"></div>`);
+  if (_archiveLoaded) {
+    renderArchiveTable();
+    _bgRefreshArchiveTasks();
+  } else {
+    document.getElementById("archive-main").innerHTML = `<div class="spinner"></div>`;
+    loadArchiveTasks();
+  }
+}
+
+async function loadArchiveTasks() {
+  const cached = _sGet(ARCHIVE_CACHE_KEY);
+  if (cached) {
+    _archiveTasks = cached;
+    _archiveLoaded = true;
+    renderArchiveTable();
+  }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME);
+    const fresh = rowsToArchiveTasks(rows);
+    _sSet(ARCHIVE_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_archiveTasks)) {
+      _archiveTasks = fresh;
+      renderArchiveTable();
+    }
+    _archiveLoaded = true;
+  } catch(e) {
+    if (!cached) {
+      const el = document.getElementById("archive-main");
+      if (el) el.innerHTML = `
+        <div style="background:#fef9c3;color:#854d0e;padding:16px 20px;border-radius:12px;margin:16px 0;border:1px solid #fde68a;">
+          <div style="font-weight:600;margin-bottom:6px;">Archive sheet not found</div>
+          <div style="font-size:12px;">Please create a sheet named <strong>"Archive"</strong> in your Google Spreadsheet, then refresh.</div>
+        </div>`;
+    }
+  }
+}
+
+async function _bgRefreshArchiveTasks() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME);
+    const fresh = rowsToArchiveTasks(rows);
+    _sSet(ARCHIVE_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_archiveTasks)) {
+      _archiveTasks = fresh;
+      renderArchiveTable();
+    }
+  } catch {}
+}
+
+function setArchiveFilter(name) {
+  _archiveFilterMember = name;
+  renderArchiveTable();
+}
+
+function renderArchiveTable() {
+  const el = document.getElementById("archive-main");
+  if (!el) return;
+  const isManager = SESSION.role === "Manager";
+
+  let tasks = isManager ? _archiveTasks : _archiveTasks.filter(t => t.assignedTo === SESSION.name);
+
+  let filterHTML = "";
+  if (isManager) {
+    const memberNames = SESSION.memberRows.map(r => r[0]);
+    const filterBtns = memberNames.map(n => {
+      const active = _archiveFilterMember === n;
+      const count  = _archiveTasks.filter(t => t.assignedTo === n).length;
+      return `<button onclick="setArchiveFilter('${n}')"
+        style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:600;
+        border:${active?"2px solid #1b4332":"1.5px solid #d1fae5"};
+        background:${active?"#1b4332":"#f0fdf4"};
+        color:${active?"#fff":"#1b4332"};">${n.split(" ")[0]} (${count})</button>`;
+    }).join("");
+    const clearBtn = _archiveFilterMember !== "All"
+      ? `<button onclick="setArchiveFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
+      : "";
+    filterHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">${filterBtns}${clearBtn}</div>`;
+    if (_archiveFilterMember !== "All") tasks = tasks.filter(t => t.assignedTo === _archiveFilterMember);
+  }
+
+  const q = _archiveSearch.toLowerCase();
+  if (q) {
+    tasks = tasks.filter(t =>
+      t.task.toLowerCase().includes(q) ||
+      (t.notes||"").toLowerCase().includes(q) ||
+      t.taskId.toLowerCase().includes(q) ||
+      (t.assignedTo||"").toLowerCase().includes(q)
+    );
+  }
+
+  const safeQ = (_archiveSearch||"").replace(/"/g,"&quot;");
+  const searchBar = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <input id="archive-search" type="text" placeholder="Search by task, notes, name…" value="${safeQ}"
+        oninput="_archiveSearch=this.value;renderArchiveTable()"
+        style="padding:8px 12px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;width:280px;"/>
+      ${_archiveSearch ? `<button onclick="_archiveSearch='';renderArchiveTable()" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">✕ Clear</button>` : ""}
+      <span style="font-size:12px;color:#9ca3af;margin-left:auto;">${tasks.length} archived task${tasks.length!==1?"s":""}</span>
+    </div>`;
+
+  const colHeaders = isManager
+    ? ["Task ID","Assigned To","Task","Due Date","Priority","Status","Notes","URL","Archived Date","Actions"]
+    : ["Task ID","Task","Due Date","Priority","Status","Notes","URL","Archived Date","Actions"];
+
+  const bodyRows = tasks.length === 0
+    ? `<tr><td colspan="${colHeaders.length}" style="text-align:center;padding:3rem;color:#9ca3af;">No archived tasks${q?" matching your search":""}.</td></tr>`
+    : tasks.map(t => {
+        const assignedCell = isManager
+          ? `<td style="padding:10px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>`
+          : "";
+        return `<tr style="background:#fff;border-bottom:1px solid #f0fdf4;">
+          <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+          ${assignedCell}
+          <td style="padding:10px 12px;max-width:200px;">${t.task}</td>
+          <td style="padding:10px 12px;white-space:nowrap;font-size:12px;color:#374151;">${formatDueDate(t.dueDate)}</td>
+          <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
+          <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
+          <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, "arc"+t.rowIndex)}</td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
+          </td>
+          <td style="padding:10px 12px;white-space:nowrap;font-size:11px;color:#6b7280;">${formatDueDate(t.archivedDate)}</td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            <button onclick="doUnarchiveTask(${t.rowIndex})" style="background:#dbeafe;color:#1e40af;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;cursor:pointer;">Unarchive</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+  el.innerHTML = filterHTML + searchBar + `
+    <div style="overflow-x:auto;">
+      <table style="font-size:13px;">
+        <thead><tr style="background:#f0fdf4;">
+          ${colHeaders.map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
 }
 
 // ── BOOT ───────────────────────────────────────────────────────────────────────
