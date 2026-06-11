@@ -846,13 +846,19 @@ function renderManagerTable(showAddForm) {
   const filtered = _filterMember === "All" ? _allTasks : _allTasks.filter(t => t.assignedTo === _filterMember);
 
   const filterBtns = memberNames.map(n => {
-    const active = _filterMember === n;
-    const count = _allTasks.filter(t => t.assignedTo === n).length;
-    return `<button onclick="setFilter('${n}')"
+    const active  = _filterMember === n;
+    const count   = _allTasks.filter(t => t.assignedTo === n).length;
+    const status  = (window._accountStatus || {})[n];
+    const manualLocked = status?.locked && (status?.failed || 0) === 0;
+    if (manualLocked) return ""; // hide admin-locked (deactivated) users from chips
+    const autoLocked = status?.locked && (status?.failed || 0) >= 3;
+    const bg     = active ? (autoLocked ? "#7f1d1d" : "#1b4332") : (autoLocked ? "#fff1f2" : "#f0fdf4");
+    const fg     = active ? "#fff" : (autoLocked ? "#991b1b" : "#1b4332");
+    const border = active ? `2px solid ${autoLocked?"#991b1b":"#1b4332"}` : `1.5px solid ${autoLocked?"#fca5a5":"#d1fae5"}`;
+    const label  = `${autoLocked?"🔒 ":""}${n.split(" ")[0]} (${count})`;
+    return `<button onclick="setFilter('${n}')" title="${autoLocked?n+" is locked — too many attempts":""}"
       style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:600;
-      border:${active?"2px solid #1b4332":"1.5px solid #d1fae5"};
-      background:${active?"#1b4332":"#f0fdf4"};
-      color:${active?"#fff":"#1b4332"};">${n.split(" ")[0]} (${count})</button>`;
+      border:${border};background:${bg};color:${fg};">${label}</button>`;
   }).join("");
   const clearBtn = _filterMember !== "All"
     ? `<button onclick="setFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
@@ -3783,11 +3789,17 @@ function renderArchiveTable() {
     const filterBtns = memberNames.map(n => {
       const active = _archiveFilterMember === n;
       const count  = _archiveTasks.filter(t => t.assignedTo === n).length;
-      return `<button onclick="setArchiveFilter('${n}')"
+      const status = (window._accountStatus || {})[n];
+      const manualLocked = status?.locked && (status?.failed || 0) === 0;
+      if (manualLocked) return "";
+      const autoLocked = status?.locked && (status?.failed || 0) >= 3;
+      const bg     = active ? (autoLocked ? "#7f1d1d" : "#1b4332") : (autoLocked ? "#fff1f2" : "#f0fdf4");
+      const fg     = active ? "#fff" : (autoLocked ? "#991b1b" : "#1b4332");
+      const border = active ? `2px solid ${autoLocked?"#991b1b":"#1b4332"}` : `1.5px solid ${autoLocked?"#fca5a5":"#d1fae5"}`;
+      const label  = `${autoLocked?"🔒 ":""}${n.split(" ")[0]} (${count})`;
+      return `<button onclick="setArchiveFilter('${n}')" title="${autoLocked?n+" is locked — too many attempts":""}"
         style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:600;
-        border:${active?"2px solid #1b4332":"1.5px solid #d1fae5"};
-        background:${active?"#1b4332":"#f0fdf4"};
-        color:${active?"#fff":"#1b4332"};">${n.split(" ")[0]} (${count})</button>`;
+        border:${border};background:${bg};color:${fg};">${label}</button>`;
     }).join("");
     const clearBtn = _archiveFilterMember !== "All"
       ? `<button onclick="setArchiveFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
