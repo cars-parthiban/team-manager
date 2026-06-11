@@ -46,6 +46,7 @@ const TEAM_LINKS_SHEET_NAME     = "Team_Links";
 const TEAM_EVENTS_SHEET_NAME    = "Team_Events";
 const ARCHIVE_SHEET_NAME        = "Archive";
 const CONTACTS_SHEET_NAME       = "Contacts";
+const COMMENTS_SHEET_NAME       = "Comments";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -194,6 +195,7 @@ let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date()
 let _calLoaded = false;
 let _actLoaded = false;
 let _contactsLoaded = false;
+let _commentsLoaded = false;
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
@@ -494,14 +496,15 @@ function prefetchAllTabs() {
     fetches.push(loadActivityLog().catch(() => {}));
   }
   fetches.push(loadContacts().catch(() => {}));
+  fetches.push(loadComments().catch(() => {}));
   Promise.all(fetches); // fire and forget — never blocks the UI
 }
 
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
-  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY);
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY); _sDel(COMMENTS_CACHE_KEY);
   // Reset loaded flags so tabs re-fetch on next visit
-  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false;
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false; _commentsLoaded = false;
   // Keep in-memory data — render is instant, background refresh updates silently
   render();
   showToast("Refreshing in background…");
@@ -529,7 +532,8 @@ function clearTasksCache() { try { localStorage.removeItem(_tasksCacheKey()); } 
 const CAL_CACHE_KEY      = "tmgr_cal";
 const ACT_CACHE_KEY      = "tmgr_act";
 const ARCHIVE_CACHE_KEY  = "tmgr_archive";
-const CONTACTS_CACHE_KEY = "tmgr_contacts";
+const CONTACTS_CACHE_KEY  = "tmgr_contacts";
+const COMMENTS_CACHE_KEY  = "tmgr_comments";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
@@ -709,9 +713,10 @@ function renderMemberTable() {
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
           </td>
           <td style="padding:10px 12px;white-space:nowrap;">
-            <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
-            <button onclick="doArchiveTask(${t.rowIndex})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Archive</button>
-            <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
+            ${_commentBtnHTML(t.taskId)}
+            <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Edit</button>
+            <button onclick="doArchiveTask(${t.rowIndex})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Archive</button>
+            <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Delete</button>
           </td></tr>`;
       }).join("");
 
@@ -898,9 +903,10 @@ function renderManagerTable(showAddForm) {
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
           </td>
           <td style="padding:10px 12px;white-space:nowrap;">
-            <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;">Edit</button>
-            <button onclick="doArchiveTask(${ri})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Archive</button>
-            <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:6px;">Delete</button>
+            ${_commentBtnHTML(t.taskId)}
+            <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Edit</button>
+            <button onclick="doArchiveTask(${ri})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Archive</button>
+            <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Delete</button>
           </td></tr>`;
       }).join("");
 
@@ -2950,6 +2956,229 @@ async function doDeleteContact(contactId, rowIndex) {
     loadContacts();
     showToast("Contact deleted ✓");
   } catch(e) { alert("Delete failed: " + e.message); }
+}
+
+// ── COMMENTS ───────────────────────────────────────────────────────────────────
+let _comments     = [];
+let _commentModal = null;
+
+function rowsToComments(rows) {
+  if (!rows || rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex:  i + 2,
+    commentId: r[0] || "",
+    taskId:    r[1] || "",
+    author:    r[2] || "",
+    timestamp: r[3] || "",
+    text:      r[4] || "",
+  })).filter(c => c.taskId && c.text);
+}
+
+function nextCommentId() {
+  const max = _comments.reduce((m, c) => Math.max(m, parseInt((c.commentId||"").replace(/\D/g,""))||0), 0);
+  return "CM" + String(max + 1).padStart(4, "0");
+}
+
+function _commentCount(taskId) {
+  return _comments.filter(c => c.taskId === taskId).length;
+}
+
+function _initials(name) {
+  return (name||"?").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+}
+
+function _authorColor(name) {
+  const colors = ["#1b4332","#1e40af","#7c3aed","#b45309","#0f766e","#9d174d"];
+  return colors[(name||"").charCodeAt(0) % colors.length];
+}
+
+async function loadComments() {
+  const cached = _sGet(COMMENTS_CACHE_KEY);
+  if (cached) { _comments = cached; _commentsLoaded = true; _refreshAllCommentBadges(); }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME);
+    const fresh = rowsToComments(rows);
+    _sSet(COMMENTS_CACHE_KEY, fresh);
+    _comments = fresh;
+    _commentsLoaded = true;
+    _refreshAllCommentBadges();
+  } catch { _commentsLoaded = true; }
+}
+
+function _refreshAllCommentBadges() {
+  const seen = new Set();
+  _comments.forEach(c => {
+    if (!seen.has(c.taskId)) { seen.add(c.taskId); _updateCommentBadge(c.taskId); }
+  });
+}
+
+async function _bgRefreshComments() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME);
+    const fresh = rowsToComments(rows);
+    _sSet(COMMENTS_CACHE_KEY, fresh);
+    _comments = fresh;
+    if (_commentModal) {
+      const taskId = _commentModal.dataset?.taskId;
+      if (taskId) _refreshCommentsThread(taskId);
+    }
+  } catch {}
+}
+
+function _commentBtnHTML(taskId) {
+  const count = _commentCount(taskId);
+  return `<span id="cm-${taskId}"><button onclick="openCommentsModal('${taskId}')" title="View / add comments"
+    style="background:${count>0?"#eff6ff":"#f9fafb"};color:${count>0?"#1d4ed8":"#6b7280"};font-size:11px;
+           font-weight:600;padding:5px 10px;border-radius:6px;
+           border:1px solid ${count>0?"#bfdbfe":"#e5e7eb"};cursor:pointer;white-space:nowrap;">
+    💬${count>0?` ${count}`:""}
+  </button></span>`;
+}
+
+function _updateCommentBadge(taskId) {
+  const el = document.getElementById(`cm-${taskId}`);
+  if (!el) return;
+  const count = _commentCount(taskId);
+  const btn = el.querySelector("button");
+  if (!btn) return;
+  btn.textContent = `💬${count > 0 ? ` ${count}` : ""}`;
+  btn.style.background   = count > 0 ? "#eff6ff" : "#f9fafb";
+  btn.style.color        = count > 0 ? "#1d4ed8" : "#6b7280";
+  btn.style.borderColor  = count > 0 ? "#bfdbfe" : "#e5e7eb";
+}
+
+function _commentsThreadHTML(taskId) {
+  const list = _comments.filter(c => c.taskId === taskId).sort((a, b) => {
+    const da = new Date(a.timestamp), db = new Date(b.timestamp);
+    return isNaN(da) || isNaN(db) ? 0 : db - da;
+  });
+  if (!list.length) return `<div style="text-align:center;color:#9ca3af;padding:32px 0;font-size:13px;">No comments yet. Be the first!</div>`;
+  return list.map(c => `
+    <div style="display:flex;gap:10px;margin-bottom:16px;">
+      <div style="flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${_authorColor(c.author)};
+           color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">
+        ${_initials(c.author)}
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+          <span style="font-size:13px;font-weight:600;color:#1b4332;">${escHtml(c.author)}</span>
+          <span style="font-size:11px;color:#9ca3af;">${formatTimestamp(c.timestamp)}</span>
+        </div>
+        <div style="font-size:13px;color:#374151;line-height:1.55;background:#f9fafb;border-radius:10px;
+             padding:9px 13px;border:1px solid #f0fdf4;white-space:pre-wrap;word-break:break-word;">
+          ${escHtml(c.text)}
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+function openCommentsModal(taskId) {
+  const task  = [...(_allTasks||[]), ...(_memberTasks||[])].find(t => t.taskId === taskId)
+             || (_archiveTasks||[]).find(t => t.taskId === taskId);
+  const title      = task?.task      || taskId;
+  const assignedTo = task?.assignedTo || "";
+
+  document.getElementById("_comments-modal")?.remove();
+  _commentModal = document.createElement("div");
+  _commentModal.id = "_comments-modal";
+  _commentModal.dataset.taskId = taskId;
+  _commentModal.innerHTML = _buildCommentModalHTML(taskId, title, assignedTo);
+  document.body.appendChild(_commentModal);
+  const thread = document.getElementById("_cm-thread");
+  if (thread) thread.scrollTop = 0;
+  document.getElementById("_cm-input")?.focus();
+  _bgRefreshComments();
+}
+
+function _buildCommentModalHTML(taskId, title, assignedTo) {
+  const count = _commentCount(taskId);
+  return `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:998;" onclick="_closeCommentsModal()"></div>
+    <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:16px;
+         box-shadow:0 8px 40px rgba(0,0,0,0.22);z-index:999;width:560px;max-width:96vw;max-height:88vh;
+         display:flex;flex-direction:column;overflow:hidden;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;padding:16px 20px 12px;
+           border-bottom:1px solid #f0fdf4;background:#f9fafb;flex-shrink:0;">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:15px;font-weight:700;color:#1b4332;">💬 Comments</span>
+            ${count ? `<span style="font-size:11px;font-weight:600;background:#1b4332;color:#fff;padding:1px 7px;border-radius:999px;">${count}</span>` : ""}
+          </div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;max-width:440px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${escHtml(title)}${assignedTo ? ` · <strong style="color:#1b4332;">${escHtml(assignedTo)}</strong>` : ""}
+          </div>
+        </div>
+        <button onclick="_closeCommentsModal()"
+          style="background:none;border:none;cursor:pointer;font-size:22px;color:#9ca3af;padding:0 0 0 12px;line-height:1;flex-shrink:0;">×</button>
+      </div>
+      <div id="_cm-thread" style="flex:1;overflow-y:auto;padding:18px 20px;">
+        ${_commentsThreadHTML(taskId)}
+      </div>
+      <div style="border-top:1px solid #f0fdf4;padding:13px 20px;background:#fafafa;flex-shrink:0;">
+        <div style="display:flex;gap:9px;align-items:flex-end;">
+          <div style="flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${_authorColor(SESSION.name)};
+               color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">
+            ${_initials(SESSION.name)}
+          </div>
+          <textarea id="_cm-input" placeholder="Add a comment… (Enter to send, Shift+Enter for new line)" rows="2"
+            style="flex:1;padding:9px 12px;border:1.5px solid #d1fae5;border-radius:10px;font-size:13px;
+                   resize:none;outline:none;font-family:inherit;line-height:1.5;box-sizing:border-box;"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doAddComment('${taskId}');}"></textarea>
+          <button onclick="doAddComment('${taskId}')" id="_cm-send"
+            style="background:#1b4332;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;
+                   border-radius:10px;border:none;cursor:pointer;white-space:nowrap;flex-shrink:0;">Send</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _refreshCommentsThread(taskId) {
+  const el = document.getElementById("_cm-thread");
+  if (!el) return;
+  el.innerHTML = _commentsThreadHTML(taskId);
+  el.scrollTop = 0;
+  // Update header count
+  const modal = document.getElementById("_comments-modal");
+  if (modal) {
+    const badge = modal.querySelector("span[style*='border-radius:999px']");
+    const count = _commentCount(taskId);
+    if (badge && count) badge.textContent = count;
+  }
+}
+
+function _closeCommentsModal() {
+  document.getElementById("_comments-modal")?.remove();
+  _commentModal = null;
+}
+
+async function doAddComment(taskId) {
+  const input   = document.getElementById("_cm-input");
+  const sendBtn = document.getElementById("_cm-send");
+  const text    = (input?.value || "").trim();
+  if (!text) return;
+
+  if (input)   { input.disabled = true; }
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = "…"; }
+
+  try {
+    const now = new Date();
+    const ts  = `${now.toLocaleDateString("en-US")} ${now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}`;
+    const id  = nextCommentId();
+    await appendRow(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME, [id, taskId, SESSION.name, ts, text]);
+
+    _comments.push({ rowIndex: _comments.length + 2, commentId: id, taskId, author: SESSION.name, timestamp: ts, text });
+    _sSet(COMMENTS_CACHE_KEY, _comments);
+
+    if (input)   { input.value = ""; input.disabled = false; input.focus(); }
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "Send"; }
+
+    _refreshCommentsThread(taskId);
+    _updateCommentBadge(taskId);
+  } catch(e) {
+    if (input)   { input.disabled = false; }
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "Send"; }
+    alert("Failed to save comment: " + e.message);
+  }
 }
 
 // ── TEAM EVENTS CALENDAR ───────────────────────────────────────────────────────
