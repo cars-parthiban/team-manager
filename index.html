@@ -717,12 +717,9 @@ function renderMemberTable() {
         return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
           <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
           <td style="padding:10px 12px;max-width:220px;">${t.task}</td>
-          <td style="padding:10px 12px;white-space:nowrap;">
-            <div style="color:${ov?"#dc2626":"#374151"};font-weight:${ov?600:400};font-size:12px;">${formatDueDate(t.dueDate)}</div>
-            ${dueDaysBadge(t.dueDate, t.status)}
-          </td>
+          <td id="td-due-${t.rowIndex}" style="padding:10px 12px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
           <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
-          <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
+          <td id="td-status-${t.rowIndex}" style="padding:10px 12px;">${_statusCellInner(t)}</td>
           <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
@@ -914,12 +911,9 @@ function renderManagerTable(showAddForm) {
           <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
           <td style="padding:10px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>
           <td style="padding:10px 12px;max-width:200px;">${t.task}</td>
-          <td style="padding:10px 12px;white-space:nowrap;">
-            <div style="color:${ov?"#dc2626":"#374151"};font-weight:${ov?600:400};font-size:12px;">${formatDueDate(t.dueDate)}</div>
-            ${dueDaysBadge(t.dueDate, t.status)}
-          </td>
+          <td id="td-due-${ri}" style="padding:10px 12px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
           <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
-          <td style="padding:10px 12px;">${statusBadge(t.status)}</td>
+          <td id="td-status-${ri}" style="padding:10px 12px;">${_statusCellInner(t)}</td>
           <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
@@ -1157,6 +1151,89 @@ async function doDeleteFromEditModal() {
 }
 
 let _editTaskModal = null;
+
+// ── INLINE TASK EDITING ────────────────────────────────────────────────────────
+function _findTaskByRow(rowIndex) {
+  return (_allTasks.concat(_memberTasks)).find(x => x.rowIndex === rowIndex);
+}
+function _dueDateCellInner(t) {
+  const ov = isOverdue(t.dueDate) && t.status !== "Completed";
+  const dateStr = t.dueDate ? formatDueDate(t.dueDate) : `<span style="color:#d1d5db;font-size:12px;">Set date</span>`;
+  return `<div onclick="inlineDueDateEdit(${t.rowIndex})" title="Click to edit" style="cursor:pointer;">
+    <div style="color:${ov?"#dc2626":"#374151"};font-weight:${ov?600:400};font-size:12px;">${dateStr}</div>
+    ${dueDaysBadge(t.dueDate, t.status)}
+  </div>`;
+}
+function _statusCellInner(t) {
+  return `<div onclick="inlineStatusEdit(${t.rowIndex})" title="Click to edit" style="cursor:pointer;display:inline-block;">${statusBadge(t.status)}</div>`;
+}
+function inlineDueDateEdit(rowIndex) {
+  const td = document.getElementById("td-due-" + rowIndex);
+  const t  = _findTaskByRow(rowIndex);
+  if (!td || !t) return;
+  td.innerHTML = `<input type="date" value="${t.dueDate||""}"
+    style="font-size:12px;padding:4px 8px;border:1.5px solid #16a34a;border-radius:6px;color:#1b4332;outline:none;"
+    onchange="saveInlineDueDate(${rowIndex},this.value)"
+    onblur="cancelInlineDueDate(${rowIndex})"
+    onkeydown="if(event.key==='Escape')cancelInlineDueDate(${rowIndex})"/>`;
+  td.querySelector("input").focus();
+}
+function cancelInlineDueDate(rowIndex) {
+  const td = document.getElementById("td-due-" + rowIndex);
+  const t  = _findTaskByRow(rowIndex);
+  if (td && t) td.innerHTML = _dueDateCellInner(t);
+}
+async function saveInlineDueDate(rowIndex, newDate) {
+  const list = SESSION.role === "Manager" ? _allTasks : _memberTasks;
+  const t = list.find(x => x.rowIndex === rowIndex);
+  if (!t) return;
+  t.dueDate = newDate;
+  const td  = document.getElementById("td-due-" + rowIndex);
+  const ov  = isOverdue(newDate) && t.status !== "Completed";
+  if (td) td.innerHTML = _dueDateCellInner(t);
+  const tr  = td?.closest("tr");
+  if (tr) tr.style.background = ov ? "#fff1f2" : "#fff";
+  try {
+    await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
+      [t.taskId, t.assignedTo, t.task, newDate, t.priority, t.status, t.notes, t.url]);
+    showToast("Saved ✓");
+  } catch(e) { showToast("Save failed ✗"); }
+}
+function inlineStatusEdit(rowIndex) {
+  const td = document.getElementById("td-status-" + rowIndex);
+  const t  = _findTaskByRow(rowIndex);
+  if (!td || !t) return;
+  const opts = ["Not Started","In Progress","On Hold","Completed"].map(s =>
+    `<option value="${s}" ${t.status===s?"selected":""}>${s}</option>`).join("");
+  td.innerHTML = `<select style="font-size:12px;padding:4px 8px;border:1.5px solid #16a34a;border-radius:6px;color:#1b4332;outline:none;cursor:pointer;background:#fff;"
+    onchange="saveInlineStatus(${rowIndex},this.value)"
+    onblur="cancelInlineStatus(${rowIndex})"
+    onkeydown="if(event.key==='Escape')cancelInlineStatus(${rowIndex})">${opts}</select>`;
+  td.querySelector("select").focus();
+}
+function cancelInlineStatus(rowIndex) {
+  const td = document.getElementById("td-status-" + rowIndex);
+  const t  = _findTaskByRow(rowIndex);
+  if (td && t) td.innerHTML = _statusCellInner(t);
+}
+async function saveInlineStatus(rowIndex, newStatus) {
+  const list = SESSION.role === "Manager" ? _allTasks : _memberTasks;
+  const t = list.find(x => x.rowIndex === rowIndex);
+  if (!t) return;
+  t.status = newStatus;
+  const td    = document.getElementById("td-status-" + rowIndex);
+  const tdDue = document.getElementById("td-due-" + rowIndex);
+  if (td) td.innerHTML = _statusCellInner(t);
+  if (tdDue) tdDue.innerHTML = _dueDateCellInner(t);
+  const ov = isOverdue(t.dueDate) && newStatus !== "Completed";
+  const tr = td?.closest("tr");
+  if (tr) tr.style.background = ov ? "#fff1f2" : "#fff";
+  try {
+    await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
+      [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, newStatus, t.notes, t.url]);
+    showToast("Saved ✓");
+  } catch(e) { showToast("Save failed ✗"); }
+}
 
 // ── ADD TASK MODAL ─────────────────────────────────────────────────────────────
 function openAddTaskModal() {
@@ -2700,6 +2777,7 @@ function renderContactsView() {
           ${isManager ? `<th style="${thS}width:28px;"></th>` : ""}
           <th style="${thS}">Vendor</th>
           <th style="${thS}">Contact Name</th>
+          <th style="${thS}">Team</th>
           <th style="${thS}">Phone</th>
           <th style="${thS}">Email</th>
           <th style="${thS}">URL</th>
@@ -2773,10 +2851,16 @@ function _contactRowHTML(c, idx, isManager) {
           style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fff1f2;color:#dc2626;cursor:pointer;">Del</button>
       </td>` : "";
 
+  const tc = teamColor(c.team);
+  const teamBadge = c.team
+    ? `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};">${escHtml(c.team)}</span>`
+    : `<span style="color:#d1d5db;">—</span>`;
+
   return `<tr style="background:${bg};" data-contact-id="${c.contactId}">
     ${drag}
     <td style="${td}font-weight:600;color:#1b4332;">${escHtml(c.vendor)}</td>
     <td style="${td}">${escHtml(c.contactName)}</td>
+    <td style="${td}">${teamBadge}</td>
     <td style="${td}">${phone}</td>
     <td style="${td}">${email}</td>
     <td style="${td}">${urlCell}</td>
