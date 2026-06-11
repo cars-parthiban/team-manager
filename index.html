@@ -217,6 +217,19 @@ function renderLogin() {
   loadLoginData();
 }
 
+// ── LOGIN NAME CACHE ───────────────────────────────────────────────────────────
+const LOGIN_NAMES_KEY = "tmgr_login_names";
+function getCachedLoginNames() {
+  try {
+    const item = JSON.parse(localStorage.getItem(LOGIN_NAMES_KEY) || "null");
+    if (!item || Date.now() - item.ts > 3600000) return null;
+    return item.names;
+  } catch { return null; }
+}
+function setCachedLoginNames(names) {
+  try { localStorage.setItem(LOGIN_NAMES_KEY, JSON.stringify({ ts: Date.now(), names })); } catch {}
+}
+
 // ── LOCKOUT HELPERS (localStorage = primary, sheet = secondary/sync) ──────────
 const LS_KEY = "tmgr_lockout";
 function lsGetAll()               { try { return JSON.parse(localStorage.getItem(LS_KEY)||"{}"); } catch { return {}; } }
@@ -237,42 +250,81 @@ function rowsToAccountStatus(rows) {
   return out;
 }
 
+function _renderLoginForm(names) {
+  const lb = document.getElementById("login-body");
+  if (!lb) return;
+  lb.innerHTML = `
+    <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Your Name</label>
+    <select id="sel-name" style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1.5px solid #d1fae5;font-size:14px;color:#1b4332;background:#f0fdf4;outline:none;appearance:none;">
+      <option value="">— Select your name —</option>
+      ${names.map(n=>`<option value="${n}">${n}</option>`).join("")}
+    </select>
+    <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">PIN</label>
+    <input id="inp-pin" type="password" maxlength="4" placeholder="4-digit PIN"
+      style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:20px;border:1.5px solid #d1fae5;font-size:18px;letter-spacing:8px;color:#1b4332;background:#f0fdf4;outline:none;"/>
+    <div id="login-error"></div>
+    <button id="btn-signin" onclick="doLogin()" style="width:100%;padding:12px;border-radius:10px;background:#1b4332;color:#fff;font-size:15px;font-weight:600;border:none;">Sign In</button>`;
+  document.getElementById("inp-pin").addEventListener("keydown", e => { if(e.key==="Enter") doLogin(); });
+}
+
+function _applyLoginStatus(configRows, statusRows) {
+  const data = configRows.slice(1).filter(r => r[0]);
+  window._configRows = data;
+  const sheetStatus = rowsToAccountStatus(statusRows);
+  const lsStatus    = lsGetAll();
+  window._accountStatus = sheetStatus;
+  Object.entries(lsStatus).forEach(([name, ls]) => {
+    const s = window._accountStatus[name] || { rowIndex: null, failed: 0 };
+    window._accountStatus[name] = { ...s, failed: Math.max(s.failed, ls.failed||0), locked: s.locked||ls.locked||false };
+  });
+  return data.map(r => r[0]);
+}
+
 async function loadLoginData() {
+  const cachedNames = getCachedLoginNames();
+  if (cachedNames) {
+    // Show form immediately from cache — no network wait
+    window._configRows = window._configRows || [];
+    window._accountStatus = {};
+    Object.entries(lsGetAll()).forEach(([name, ls]) => {
+      window._accountStatus[name] = { rowIndex: null, failed: ls.failed||0, locked: ls.locked||false };
+    });
+    _renderLoginForm(cachedNames);
+    // Refresh config + account status in background
+    _bgRefreshLoginData();
+    return;
+  }
+  // No cache — first visit, must fetch
   try {
     const [configRows, statusRows] = await Promise.all([
       proxyCall({ action: "getConfig", sheetId: CALENDAR_SHEET_ID }),
       readSheet(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME).catch(() => [])
     ]);
-    const data = configRows.slice(1).filter(r => r[0]);
-    window._configRows = data;
-    const sheetStatus  = rowsToAccountStatus(statusRows);
-    const lsStatus     = lsGetAll();
-    // Merge: locked in EITHER source → locked
-    window._accountStatus = sheetStatus;
-    Object.entries(lsStatus).forEach(([name, ls]) => {
-      const s = window._accountStatus[name] || { rowIndex: null, failed: 0 };
-      window._accountStatus[name] = {
-        ...s,
-        failed: Math.max(s.failed, ls.failed || 0),
-        locked: s.locked || ls.locked || false
-      };
-    });
-    const names = data.map(r => r[0]);
-    document.getElementById("login-body").innerHTML = `
-      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Your Name</label>
-      <select id="sel-name" style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1.5px solid #d1fae5;font-size:14px;color:#1b4332;background:#f0fdf4;outline:none;appearance:none;">
-        <option value="">— Select your name —</option>
-        ${names.map(n=>`<option value="${n}">${n}</option>`).join("")}
-      </select>
-      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">PIN</label>
-      <input id="inp-pin" type="password" maxlength="4" placeholder="4-digit PIN"
-        style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:20px;border:1.5px solid #d1fae5;font-size:18px;letter-spacing:8px;color:#1b4332;background:#f0fdf4;outline:none;"/>
-      <div id="login-error"></div>
-      <button id="btn-signin" onclick="doLogin()" style="width:100%;padding:12px;border-radius:10px;background:#1b4332;color:#fff;font-size:15px;font-weight:600;border:none;">Sign In</button>`;
-    document.getElementById("inp-pin").addEventListener("keydown", e => { if(e.key==="Enter") doLogin(); });
+    const names = _applyLoginStatus(configRows, statusRows);
+    setCachedLoginNames(names);
+    _renderLoginForm(names);
   } catch(e) {
     document.getElementById("login-body").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:12px;border-radius:8px;">Could not load config: ${e.message}</div>`;
   }
+}
+
+async function _bgRefreshLoginData() {
+  try {
+    const [configRows, statusRows] = await Promise.all([
+      proxyCall({ action: "getConfig", sheetId: CALENDAR_SHEET_ID }),
+      readSheet(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME).catch(() => [])
+    ]);
+    const names = _applyLoginStatus(configRows, statusRows);
+    setCachedLoginNames(names);
+    // Update dropdown silently with fresh names (picks up new/removed users)
+    const sel = document.getElementById("sel-name");
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = `<option value="">— Select your name —</option>` +
+        names.map(n => `<option value="${n}">${n}</option>`).join("");
+      if (cur) sel.value = cur;
+    }
+  } catch {} // silent — form already visible
 }
 
 async function doLogin() {
@@ -503,8 +555,10 @@ async function loadMemberTasks() {
 }
 
 async function _bgRefreshMemberTasks() {
+  if (_taskOpInProgress) return;
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    if (_taskOpInProgress) return; // re-check after async wait
     const all   = rowsToTasks(rows);
     setCachedTasks(all);
     const fresh = all.filter(t => t.assignedTo === SESSION.name);
@@ -678,6 +732,7 @@ let _archiveTasks = [];
 let _archiveLoaded = false;
 let _archiveSearch = "";
 let _archiveFilterMember = "All";
+let _taskOpInProgress = false; // pauses bg refresh during archive/unarchive/delete
 
 // ── MANAGER VIEW ───────────────────────────────────────────────────────────────
 let _allTasks = [];
@@ -737,8 +792,10 @@ async function loadAllTasks() {
 }
 
 async function _bgRefreshAllTasks() {
+  if (_taskOpInProgress) return;
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
+    if (_taskOpInProgress) return; // re-check after async wait
     const fresh = rowsToTasks(rows);
     setCachedTasks(fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_allTasks)) {
@@ -1134,7 +1191,7 @@ function tabBarHTML() {
   const tabs = [["tasks","Tasks"],["calendar","Absence Calendar"],["links","Links"]];
   if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
-  if (SESSION.role === "Manager") tabs.push(["activity","Activity"]);
+  if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
   tabs.push(["archive","Archive"]);
   return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
     tabs.map(([id,label]) => {
@@ -1577,6 +1634,167 @@ async function doDeleteCalEvent(rowIndex) {
   } catch(e) { alert("Delete failed: " + e.message); }
 }
 
+// ── USER MANAGEMENT ────────────────────────────────────────────────────────────
+function renderUsersPanel() {
+  const users = (window._configRows || []).filter(r => r[0]);
+  const rows = users.map((r, i) => {
+    const name = r[0], role = r[2], title = r[4]||"", team = r[5]||"";
+    const teams = team.split(",").map(t=>t.trim()).filter(Boolean);
+    const teamBadges = teams.map(t => {
+      const tc = teamColor(t);
+      return `<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};">${t}</span>`;
+    }).join(" ");
+    return `<tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f0fdf4;">
+      <td style="padding:9px 14px;font-weight:600;color:#1b4332;">${name}</td>
+      <td style="padding:9px 14px;">${roleBadge(role)}</td>
+      <td style="padding:9px 14px;font-size:12px;color:#6b7280;">${title}</td>
+      <td style="padding:9px 14px;">${teamBadges}</td>
+      <td style="padding:9px 14px;white-space:nowrap;">
+        <button onclick="openEditUserModal('${name.replace(/'/g,"&#39;")}')"
+          style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #d1fae5;cursor:pointer;margin-right:4px;">Edit</button>
+        <button onclick="doRemoveUser('${name.replace(/'/g,"&#39;")}')"
+          style="background:#fff1f2;color:#dc2626;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;cursor:pointer;">Remove</button>
+      </td>
+    </tr>`;
+  }).join("");
+
+  return `
+    <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;overflow:hidden;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #d1fae5;background:#f0fdf4;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:14px;font-weight:700;color:#1b4332;">Team Members</span>
+          <span style="font-size:11px;font-weight:600;background:#1b4332;color:#fff;padding:1px 7px;border-radius:999px;">${users.length}</span>
+        </div>
+        <button onclick="openAddUserModal()"
+          style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;border:none;cursor:pointer;">+ Add User</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;font-size:13px;">
+          <thead><tr style="background:#f9fafb;">
+            ${["Name","Role","Title","Team","Actions"].map(h=>`<th style="padding:9px 14px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">${h}</th>`).join("")}
+          </tr></thead>
+          <tbody>${rows || `<tr><td colspan="5" style="padding:2rem;text-align:center;color:#9ca3af;">No users found.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+let _editUserName = null;
+
+function openAddUserModal() { _openUserModal(null); }
+function openEditUserModal(name) { _editUserName = name; _openUserModal(name); }
+
+function _openUserModal(name) {
+  const existing = document.getElementById("user-modal");
+  if (existing) existing.remove();
+  const isEdit = !!name;
+  const r = isEdit ? (window._configRows || []).find(r => r[0] === name) || [] : [];
+  const allTeams = [...new Set((window._configRows||[]).flatMap(r => (r[5]||"").split(",").map(t=>t.trim()).filter(Boolean)))];
+  const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;outline:none;";
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="user-modal" onclick="if(event.target===this)_closeUserModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.25);max-height:90vh;overflow-y:auto;">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:18px;">${isEdit?"Edit User":"Add User"}</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Full Name</label>
+        <input id="um-name" value="${isEdit?name:""}" ${isEdit?"readonly style='"+F+" background:#f9fafb;color:#9ca3af;margin-bottom:14px;'":"style='"+F+" margin-bottom:14px;'"} placeholder="e.g. John Smith"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">${isEdit?"New PIN (leave blank to keep current)":"PIN (4 digits)"}</label>
+        <input id="um-pin" type="password" maxlength="4" placeholder="••••" style="${F} letter-spacing:6px;margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Role</label>
+        <select id="um-role" style="${F} margin-bottom:14px;">
+          <option value="Member" ${r[2]==="Member"||!isEdit?"selected":""}>Member</option>
+          <option value="Manager" ${r[2]==="Manager"?"selected":""}>Manager</option>
+        </select>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Job Title</label>
+        <input id="um-title" value="${(r[5]||"").replace(/"/g,"&quot;")}" placeholder="e.g. Senior Engineer" style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Team</label>
+        <input id="um-team" value="${(r[6]||"").replace(/"/g,"&quot;")}" placeholder="e.g. Workday or Workday,Peoplesoft" style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Email</label>
+        <input id="um-email" type="email" value="${(r[3]||"").replace(/"/g,"&quot;")}" placeholder="name@company.com" style="${F} margin-bottom:14px;"/>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Phone</label>
+        <input id="um-phone" value="${(r[4]||"").replace(/"/g,"&quot;")}" placeholder="e.g. +1 555 123 4567" style="${F} margin-bottom:14px;"/>
+
+        <div id="um-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="_closeUserModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button id="um-save-btn" onclick="doSaveUser(${isEdit})" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">${isEdit?"Save Changes":"Add User"}</button>
+        </div>
+      </div>
+    </div>`);
+  document.getElementById("um-name").focus();
+}
+
+function _closeUserModal() {
+  const el = document.getElementById("user-modal");
+  if (el) el.remove();
+  _editUserName = null;
+}
+
+async function doSaveUser(isEdit) {
+  const name  = document.getElementById("um-name").value.trim();
+  const pin   = document.getElementById("um-pin").value.trim();
+  const role  = document.getElementById("um-role").value;
+  const title = document.getElementById("um-title").value.trim();
+  const team  = document.getElementById("um-team").value.trim();
+  const email = document.getElementById("um-email").value.trim();
+  const phone = document.getElementById("um-phone").value.trim();
+  const errEl = document.getElementById("um-error");
+  const btnEl = document.getElementById("um-save-btn");
+
+  errEl.textContent = "";
+  if (!name) { errEl.textContent = "Name is required."; return; }
+  if (!isEdit && !pin) { errEl.textContent = "PIN is required for new users."; return; }
+  if (pin && !/^\d{4}$/.test(pin)) { errEl.textContent = "PIN must be exactly 4 digits."; return; }
+
+  btnEl.disabled = true; btnEl.textContent = "Saving…";
+  try {
+    if (isEdit) {
+      const result = await proxyCall({ action: "updateUser", sheetId: CALENDAR_SHEET_ID,
+        name, newPin: pin, role, title, team, email, phone });
+      if (!result || !result.ok) throw new Error(result?.error || "Update failed");
+      // Update _configRows in memory
+      window._configRows = (window._configRows||[]).map(r =>
+        r[0] === name ? [r[0], r[1], role, email, phone, title, team] : r
+      );
+    } else {
+      if ((window._configRows||[]).some(r => r[0] === name)) {
+        errEl.textContent = "A user with this name already exists.";
+        btnEl.disabled = false; btnEl.textContent = "Add User"; return;
+      }
+      await appendRow(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME, [name, pin, role, email, phone, title, team]);
+      window._configRows = [...(window._configRows||[]), [name, "", role, email, phone, title, team]];
+      // Update login name cache
+      setCachedLoginNames((window._configRows||[]).filter(r=>r[0]).map(r=>r[0]));
+    }
+    _closeUserModal();
+    loadActivityLog(); // refresh activity tab to show updated user list
+    showToast(isEdit ? "User updated ✓" : "User added ✓");
+  } catch(e) {
+    errEl.textContent = "Failed: " + e.message;
+    btnEl.disabled = false; btnEl.textContent = isEdit ? "Save Changes" : "Add User";
+  }
+}
+
+async function doRemoveUser(name) {
+  if (!confirm(`Remove "${name}" from the team?\n\nThis deletes them from the Config sheet. Their tasks and archived tasks will remain.`)) return;
+  try {
+    const result = await proxyCall({ action: "deleteUser", sheetId: CALENDAR_SHEET_ID, name });
+    if (!result || !result.ok) throw new Error(result?.error || "Delete failed");
+    window._configRows = (window._configRows||[]).filter(r => r[0] !== name);
+    setCachedLoginNames((window._configRows||[]).filter(r=>r[0]).map(r=>r[0]));
+    loadActivityLog();
+    showToast(`${name.split(" ")[0]} removed ✓`);
+  } catch(e) { alert("Remove failed: " + e.message); }
+}
+
 // ── ACTIVITY LOG ───────────────────────────────────────────────────────────────
 async function logLoginActivity() {
   try {
@@ -1675,12 +1893,19 @@ function renderActivityTable(logRows) {
     </div>` : "";
 
   const dataRows = logRows.length > 1 ? logRows.slice(1).reverse() : [];
+  const _toInputDate = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const logDates = dataRows.map(r => r[0] ? new Date(r[0]) : null).filter(d => d && !isNaN(d));
+  const earliestDate = logDates.length ? logDates.reduce((a,b) => a<b?a:b) : new Date();
+  const purgeFromDefault = _toInputDate(earliestDate);
+  const purgeTodayDefault = _toInputDate(new Date());
   const purgeHTML = `
     <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <span style="font-size:13px;font-weight:600;color:#374151;">Purge logs older than</span>
-      <input id="purge-days" type="number" min="1" max="365" value="30"
-        style="width:68px;padding:6px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;text-align:center;"/>
-      <span style="font-size:13px;color:#374151;">days</span>
+      <span style="font-size:13px;font-weight:600;color:#374151;">Delete activity from</span>
+      <input id="purge-from" type="date" value="${purgeFromDefault}"
+        style="padding:6px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;"/>
+      <span style="font-size:13px;color:#374151;">to</span>
+      <input id="purge-to" type="date" value="${purgeTodayDefault}"
+        style="padding:6px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;"/>
       <button onclick="purgeActivityLog()"
         style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">
         🗑 Purge
@@ -1713,7 +1938,8 @@ function renderActivityTable(logRows) {
           </div>`}
     </div>`;
 
-  el.innerHTML = lockedHTML + purgeHTML + logHTML;
+  const usersHTML = renderUsersPanel();
+  el.innerHTML = usersHTML + lockedHTML + purgeHTML + logHTML;
 }
 
 function roleBadge(role) {
@@ -1722,41 +1948,70 @@ function roleBadge(role) {
 }
 
 async function purgeActivityLog() {
-  const daysEl  = document.getElementById("purge-days");
+  const fromEl   = document.getElementById("purge-from");
+  const toEl     = document.getElementById("purge-to");
   const statusEl = document.getElementById("purge-status");
-  const days    = parseInt(daysEl?.value);
-  if (!days || days < 1) { if (statusEl) statusEl.textContent = "Enter a valid number of days."; return; }
-  if (!confirm(`Permanently delete all login records older than ${days} day${days!==1?"s":""}?`)) return;
 
-  if (statusEl) statusEl.textContent = "Working…";
+  if (!fromEl?.value || !toEl?.value) {
+    if (statusEl) statusEl.textContent = "Select a date range.";
+    return;
+  }
+
+  const fromDate = new Date(fromEl.value + "T00:00:00");
+  const toDate   = new Date(toEl.value   + "T23:59:59");
+
+  if (fromDate > toDate) {
+    if (statusEl) statusEl.textContent = "From date must be before To date.";
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = "Scanning…";
+  let rows;
   try {
-    const rows = await readSheet(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME);
-    if (rows.length < 2) { if (statusEl) statusEl.textContent = "No records to purge."; return; }
+    rows = await readSheet(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME);
+  } catch(e) {
+    if (statusEl) statusEl.textContent = "Failed to load records.";
+    alert("Purge error: " + e.message);
+    return;
+  }
 
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    cutoff.setHours(0, 0, 0, 0);
+  if (!rows || rows.length < 2) {
+    if (statusEl) statusEl.textContent = "No records to purge.";
+    return;
+  }
 
-    const toDelete = [];
-    rows.slice(1).forEach((r, i) => {
-      const dt = r[0] ? new Date(r[0]) : null;
-      if (dt && !isNaN(dt) && dt < cutoff) toDelete.push(i + 2);
-    });
+  const toDelete = [];
+  rows.slice(1).forEach((r, i) => {
+    const raw = r[0];
+    if (!raw) return;
+    const dt = new Date(raw);
+    if (!isNaN(dt) && dt >= fromDate && dt <= toDate) toDelete.push(i + 2);
+  });
 
-    if (!toDelete.length) {
-      if (statusEl) statusEl.textContent = `No records older than ${days} days found.`;
-      return;
-    }
+  if (!toDelete.length) {
+    if (statusEl) statusEl.textContent = "";
+    alert(`No login records found between ${fromEl.value} and ${toEl.value}.`);
+    return;
+  }
 
+  if (!confirm(`Delete ${toDelete.length} login record${toDelete.length !== 1 ? "s" : ""} from ${fromEl.value} to ${toEl.value}?`)) {
+    if (statusEl) statusEl.textContent = "";
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = "Deleting…";
+  try {
     toDelete.sort((a, b) => b - a);
     for (const rowIndex of toDelete) {
       await deleteRowProxy(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, rowIndex);
     }
-
     _sDel(ACT_CACHE_KEY); _actLoaded = false;
     await loadActivityLog();
-    showToast(`Purged ${toDelete.length} record${toDelete.length!==1?"s":""} ✓`);
-  } catch(e) { alert("Purge failed: " + e.message); }
+    showToast(`Purged ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} ✓`);
+  } catch(e) {
+    if (statusEl) statusEl.textContent = "Purge failed.";
+    alert("Purge failed: " + e.message);
+  }
 }
 
 // ── TEAM LINKS ─────────────────────────────────────────────────────────────────
@@ -2631,6 +2886,22 @@ async function doArchiveTask(rowIndex) {
     : _memberTasks.find(t => t.rowIndex === rowIndex);
   if (!task) return;
   if (!confirm(`Archive "${task.task}"?\n\nThis will move the task to the Archive tab where you can search it later.`)) return;
+
+  // Optimistic update — remove row immediately, fix indices for rows below
+  _taskOpInProgress = true;
+  const prevAllTasks    = _allTasks.slice();
+  const prevMemberTasks = _memberTasks.slice();
+  const shiftIndex = t => t.rowIndex > rowIndex ? { ...t, rowIndex: t.rowIndex - 1 } : t;
+  if (isManager) {
+    _allTasks    = _allTasks.filter(t => t.rowIndex !== rowIndex).map(shiftIndex);
+    setCachedTasks(_allTasks); // update localStorage immediately so nav-back shows correct list
+  } else {
+    _memberTasks = _memberTasks.filter(t => t.rowIndex !== rowIndex).map(shiftIndex);
+  }
+  if (isManager) renderManagerTable(); else renderMemberTable();
+  showToast("Archived ✓");
+
+  // Background: write to Archive sheet then delete from Tasks sheet
   try {
     const today = new Date();
     const archivedDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
@@ -2639,15 +2910,18 @@ async function doArchiveTask(rowIndex) {
     await deleteRowProxy(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex);
     _sDel(ARCHIVE_CACHE_KEY);
     _archiveLoaded = false;
-    if (isManager) await reloadAllTasks();
-    else await loadMemberTasks();
-    showToast("Archived ✓");
   } catch(e) {
+    // Restore on failure
+    _allTasks    = prevAllTasks;
+    _memberTasks = prevMemberTasks;
+    if (isManager) { setCachedTasks(_allTasks); renderManagerTable(); } else renderMemberTable();
     if (e.message && e.message.toLowerCase().includes("sheet")) {
-      alert(`Archive failed: The "Archive" sheet does not exist in your Google Spreadsheet.\n\nPlease create a sheet named "Archive" in your spreadsheet and try again.`);
+      alert(`Archive failed: The "Archive" sheet does not exist.\n\nPlease create a sheet named "Archive" in your spreadsheet and try again.`);
     } else {
       alert("Archive failed: " + e.message);
     }
+  } finally {
+    _taskOpInProgress = false;
   }
 }
 
@@ -2655,6 +2929,16 @@ async function doUnarchiveTask(rowIndex) {
   const task = _archiveTasks.find(t => t.rowIndex === rowIndex);
   if (!task) return;
   if (!confirm(`Unarchive "${task.task}"?\n\nThis will move the task back to the active Tasks tab.`)) return;
+
+  // Optimistic update — remove row immediately, fix indices for rows below
+  _taskOpInProgress = true;
+  const prevArchiveTasks = _archiveTasks.slice();
+  const shiftIndex = t => t.rowIndex > rowIndex ? { ...t, rowIndex: t.rowIndex - 1 } : t;
+  _archiveTasks = _archiveTasks.filter(t => t.rowIndex !== rowIndex).map(shiftIndex);
+  renderArchiveTable();
+  showToast("Unarchived ✓");
+
+  // Background: get next task ID, write to Tasks sheet, delete from Archive sheet
   try {
     const allRows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
     const taskId  = nextTaskId(rowsToTasks(allRows));
@@ -2663,12 +2947,33 @@ async function doUnarchiveTask(rowIndex) {
     await deleteRowProxy(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME, rowIndex);
     _sDel(ARCHIVE_CACHE_KEY);
     _archiveLoaded = false;
-    clearTasksCache();
-    _allTasks = [];
-    _memberTasks = [];
-    await loadArchiveTasks();
-    showToast("Unarchived ✓");
-  } catch(e) { alert("Unarchive failed: " + e.message); }
+    // Add restored task into in-memory task lists so Tasks tab shows it immediately
+    const newTask = {
+      rowIndex: allRows.length + 1,
+      taskId, assignedTo: task.assignedTo, task: task.task,
+      dueDate: task.dueDate, priority: task.priority,
+      status: task.status, notes: task.notes, url: task.url
+    };
+    if (_allTasks.length > 0) {
+      _allTasks = [..._allTasks, newTask];
+      setCachedTasks(_allTasks);
+    } else {
+      clearTasksCache();
+    }
+    _memberTasks = SESSION.role !== "Manager"
+      ? [..._memberTasks, newTask]
+      : [];
+    if (_activeTab === "tasks") {
+      if (SESSION.role === "Manager") renderManagerTable(); else renderMemberTable();
+    }
+  } catch(e) {
+    // Restore on failure
+    _archiveTasks = prevArchiveTasks;
+    renderArchiveTable();
+    alert("Unarchive failed: " + e.message);
+  } finally {
+    _taskOpInProgress = false;
+  }
 }
 
 function renderArchive() {
@@ -2712,8 +3017,10 @@ async function loadArchiveTasks() {
 }
 
 async function _bgRefreshArchiveTasks() {
+  if (_taskOpInProgress) return;
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME);
+    if (_taskOpInProgress) return; // re-check after async wait
     const fresh = rowsToArchiveTasks(rows);
     _sSet(ARCHIVE_CACHE_KEY, fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_archiveTasks)) {
