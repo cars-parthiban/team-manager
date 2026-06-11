@@ -315,6 +315,7 @@ async function doLogin() {
     }
     resetAccountStatus(name);
     render();
+    prefetchAllTabs();
     logLoginActivity();
   } catch(e) {
     if (btnEl) { btnEl.disabled = false; btnEl.style.opacity = "1"; btnEl.textContent = "Sign In"; }
@@ -402,6 +403,22 @@ function shellHTML(roleLabel, userName, mainContent) {
 }
 
 function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; render(); }
+
+function prefetchAllTabs() {
+  // Fire all tab data fetches in parallel right after login
+  // Each loader checks its own _loaded flag — safe to call anytime, no double-fetch
+  const fetches = [
+    loadCalendarEvents().catch(() => {}),
+    loadTeamLinks().catch(() => {}),
+    loadTeamEvents().catch(() => {}),
+    loadArchiveTasks().catch(() => {})
+  ];
+  if (SESSION && SESSION.role === "Manager") {
+    fetches.push(loadActivityLog().catch(() => {}));
+  }
+  Promise.all(fetches); // fire and forget — never blocks the UI
+}
+
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
   clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY);
