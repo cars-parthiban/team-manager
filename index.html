@@ -2256,13 +2256,9 @@ function renderLinksView() {
     return;
   }
 
-  let lastTeam = null;
   const rows = visible.map((l, i) => {
     const tc = teamColor(l.team);
-    const teamCell = l.team !== lastTeam
-      ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};white-space:nowrap;">${l.team}</span>`
-      : `<span style="font-size:10px;color:#d1fae5;">↓</span>`;
-    lastTeam = l.team;
+    const teamCell = `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};white-space:nowrap;">${l.team}</span>`;
     const rowBg = i % 2 === 0 ? "#fff" : "#fafafa";
     return `<tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
       <td style="padding:8px 10px;white-space:nowrap;">${teamCell}</td>
