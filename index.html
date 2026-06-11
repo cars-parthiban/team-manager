@@ -285,6 +285,7 @@ function _renderLoginForm(names) {
     </select>
     <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">PIN</label>
     <input id="inp-pin" type="password" maxlength="4" placeholder="4-digit PIN"
+      autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore="true"
       style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:20px;border:1.5px solid #d1fae5;font-size:18px;letter-spacing:8px;color:#1b4332;background:#f0fdf4;outline:none;"/>
     <div id="login-error"></div>
     <button id="btn-signin" onclick="doLogin()" style="width:100%;padding:12px;border-radius:10px;background:#1b4332;color:#fff;font-size:15px;font-weight:600;border:none;">Sign In</button>`;
@@ -3053,23 +3054,34 @@ function _commentsThreadHTML(taskId) {
     return isNaN(da) || isNaN(db) ? 0 : db - da;
   });
   if (!list.length) return `<div style="text-align:center;color:#9ca3af;padding:32px 0;font-size:13px;">No comments yet. Be the first!</div>`;
-  return list.map(c => `
-    <div style="display:flex;gap:10px;margin-bottom:16px;">
+  return list.map(c => {
+    const isOwn = SESSION && SESSION.name === c.author;
+    return `
+    <div id="cm-row-${c.commentId}" style="display:flex;gap:10px;margin-bottom:16px;">
       <div style="flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${_authorColor(c.author)};
            color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">
         ${_initials(c.author)}
       </div>
       <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:13px;font-weight:600;color:#1b4332;">${escHtml(c.author)}</span>
           <span style="font-size:11px;color:#9ca3af;">${formatTimestamp(c.timestamp)}</span>
+          ${isOwn ? `
+            <button onclick="doEditComment('${c.commentId}','${taskId}')"
+              style="background:none;border:none;cursor:pointer;font-size:11px;color:#6b7280;padding:0 4px;
+                     line-height:1;text-decoration:underline;text-underline-offset:2px;">Edit</button>
+            <button onclick="doDeleteComment('${c.commentId}','${taskId}')"
+              style="background:none;border:none;cursor:pointer;font-size:11px;color:#dc2626;padding:0 4px;
+                     line-height:1;text-decoration:underline;text-underline-offset:2px;">Delete</button>
+          ` : ""}
         </div>
-        <div style="font-size:13px;color:#374151;line-height:1.55;background:#f9fafb;border-radius:10px;
+        <div id="cm-text-${c.commentId}" style="font-size:13px;color:#374151;line-height:1.55;background:#f9fafb;border-radius:10px;
              padding:9px 13px;border:1px solid #f0fdf4;white-space:pre-wrap;word-break:break-word;">
           ${escHtml(c.text)}
         </div>
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function openCommentsModal(taskId) {
@@ -3087,7 +3099,6 @@ function openCommentsModal(taskId) {
   const thread = document.getElementById("_cm-thread");
   if (thread) thread.scrollTop = 0;
   document.getElementById("_cm-input")?.focus();
-  _bgRefreshComments();
 }
 
 function _buildCommentModalHTML(taskId, title, assignedTo) {
@@ -3149,6 +3160,65 @@ function _refreshCommentsThread(taskId) {
 function _closeCommentsModal() {
   document.getElementById("_comments-modal")?.remove();
   _commentModal = null;
+}
+
+function doEditComment(commentId, taskId) {
+  const c = _comments.find(x => x.commentId === commentId);
+  if (!c) return;
+  const textEl = document.getElementById(`cm-text-${commentId}`);
+  if (!textEl) return;
+  textEl.innerHTML = `
+    <textarea id="cm-edit-input-${commentId}" rows="3"
+      style="width:100%;padding:8px 10px;border:1.5px solid #a7f3d0;border-radius:8px;font-size:13px;
+             font-family:inherit;line-height:1.5;resize:vertical;outline:none;box-sizing:border-box;"
+    >${escHtml(c.text)}</textarea>
+    <div style="display:flex;gap:7px;margin-top:7px;">
+      <button onclick="doSaveComment('${commentId}','${taskId}')"
+        style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:5px 14px;
+               border-radius:7px;border:none;cursor:pointer;">Save</button>
+      <button onclick="_refreshCommentsThread('${taskId}')"
+        style="background:#f3f4f6;color:#374151;font-size:12px;font-weight:600;padding:5px 14px;
+               border-radius:7px;border:none;cursor:pointer;">Cancel</button>
+    </div>`;
+  document.getElementById(`cm-edit-input-${commentId}`)?.focus();
+}
+
+async function doSaveComment(commentId, taskId) {
+  const input = document.getElementById(`cm-edit-input-${commentId}`);
+  const newText = (input?.value || "").trim();
+  if (!newText) return;
+  const c = _comments.find(x => x.commentId === commentId);
+  if (!c) return;
+  c.text = newText;
+  _sSet(COMMENTS_CACHE_KEY, _comments);
+  _refreshCommentsThread(taskId);
+  try {
+    await updateRow(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME, c.rowIndex, [c.commentId, c.taskId, c.author, c.timestamp, newText]);
+  } catch(e) {
+    alert("Failed to save edit: " + e.message);
+    loadComments();
+  }
+}
+
+async function doDeleteComment(commentId, taskId) {
+  if (!confirm("Delete this comment?")) return;
+  const c = _comments.find(x => x.commentId === commentId);
+  if (!c) return;
+  _comments = _comments.filter(x => x.commentId !== commentId);
+  _sSet(COMMENTS_CACHE_KEY, _comments);
+  _refreshCommentsThread(taskId);
+  _updateCommentBadge(taskId);
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME, c.rowIndex);
+    const rows = await readSheet(CALENDAR_SHEET_ID, COMMENTS_SHEET_NAME);
+    _comments = rowsToComments(rows);
+    _sSet(COMMENTS_CACHE_KEY, _comments);
+    _refreshCommentsThread(taskId);
+    _updateCommentBadge(taskId);
+  } catch(e) {
+    alert("Delete failed: " + e.message);
+    loadComments();
+  }
 }
 
 async function doAddComment(taskId) {
