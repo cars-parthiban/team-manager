@@ -70,7 +70,8 @@ const readConfig = () => readSheet(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME);
 const readSheet  = (sheetId, sheetName) => proxyCall({ action: "getTasks", sheetId, sheetName });
 const appendRow  = (sheetId, sheetName, values) => proxyCall({ action: "appendRow", sheetId, sheetName, values: JSON.stringify(values) });
 const updateRow  = (sheetId, sheetName, rowIndex, values) => proxyCall({ action: "updateRow", sheetId, sheetName, rowIndex, values: JSON.stringify(values) });
-const deleteRowProxy = (sheetId, sheetName, rowIndex) => proxyCall({ action: "deleteRow", sheetId, sheetName, rowIndex });
+const deleteRowProxy      = (sheetId, sheetName, rowIndex) => proxyCall({ action: "deleteRow", sheetId, sheetName, rowIndex });
+const batchDeleteRowProxy = (sheetId, sheetName, rowIndices) => proxyCall({ action: "batchDeleteRows", sheetId, sheetName, rowIndices: JSON.stringify(rowIndices) });
 
 // ── UTILS ──────────────────────────────────────────────────────────────────────
 function rowsToTasks(rows) {
@@ -195,7 +196,10 @@ let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date()
 let _calLoaded = false;
 let _actLoaded = false;
 let _contactsLoaded = false;
-let _commentsLoaded = false;
+let _commentsLoaded  = false;
+let _teamsList       = [], _teamsLoaded = false;
+let _obTemplate      = [], _obStatus = [], _obLoaded = false;
+let _obActiveMember  = null, _obView = "checklist", _obActiveTeam = "";
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
@@ -498,14 +502,18 @@ function prefetchAllTabs() {
   }
   fetches.push(loadContacts().catch(() => {}));
   fetches.push(loadComments().catch(() => {}));
+  if (SESSION && SESSION.role === "Manager") {
+    fetches.push(loadTeams().catch(() => {}));
+    fetches.push(loadOnboarding().catch(() => {}));
+  }
   Promise.all(fetches); // fire and forget — never blocks the UI
 }
 
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
-  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY); _sDel(COMMENTS_CACHE_KEY);
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY); _sDel(COMMENTS_CACHE_KEY); _sDel(TEAMS_CACHE_KEY); _sDel(ONBOARDING_TMPL_KEY); _sDel(ONBOARDING_STATUS_KEY);
   // Reset loaded flags so tabs re-fetch on next visit
-  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false; _commentsLoaded = false;
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false; _commentsLoaded = false; _obLoaded = false; _teamsLoaded = false;
   // Keep in-memory data — render is instant, background refresh updates silently
   render();
   showToast("Refreshing in background…");
@@ -534,7 +542,13 @@ const CAL_CACHE_KEY      = "tmgr_cal";
 const ACT_CACHE_KEY      = "tmgr_act";
 const ARCHIVE_CACHE_KEY  = "tmgr_archive";
 const CONTACTS_CACHE_KEY  = "tmgr_contacts";
-const COMMENTS_CACHE_KEY  = "tmgr_comments";
+const COMMENTS_CACHE_KEY       = "tmgr_comments";
+const TEAMS_SHEET_NAME         = "Teams";
+const TEAMS_CACHE_KEY          = "tmgr_teams";
+const ONBOARDING_TMPL_SHEET    = "Onboarding_Template";
+const ONBOARDING_STATUS_SHEET  = "Onboarding_Status";
+const ONBOARDING_TMPL_KEY      = "tmgr_ob_tmpl";
+const ONBOARDING_STATUS_KEY    = "tmgr_ob_status";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
@@ -784,6 +798,7 @@ function renderManager() {
   if (_activeTab === "events")     { renderTeamEvents();   return; }
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
+  if (_activeTab === "onboarding") { renderOnboarding();   return; }
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
   if (_allTasks.length > 0) {
     renderManagerTable();
@@ -1234,6 +1249,7 @@ function tabBarHTML() {
   if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
   if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
+  if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
   tabs.push(["archive","Archive"]);
   return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
     tabs.map(([id,label]) => {
@@ -1768,7 +1784,15 @@ function _openUserModal(name) {
         <input id="um-title" value="${(r[5]||"").replace(/"/g,"&quot;")}" placeholder="e.g. Senior Engineer" style="${F} margin-bottom:14px;"/>
 
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Team</label>
-        <input id="um-team" value="${(r[6]||"").replace(/"/g,"&quot;")}" placeholder="e.g. Workday or Workday,Peoplesoft" style="${F} margin-bottom:14px;"/>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;padding:10px 12px;border:1.5px solid #d1fae5;border-radius:8px;background:#f9fafb;margin-bottom:14px;">
+          ${getTeamNames().length ? getTeamNames().map(t => {
+            const sel = (r[6]||"").split(",").map(x=>x.trim()).includes(t);
+            return `<label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:#1b4332;">
+              <input type="checkbox" class="um-team-cb" value="${escHtml(t)}" ${sel?"checked":""}
+                style="width:14px;height:14px;accent-color:#1b4332;cursor:pointer;"/>
+              ${escHtml(t)}</label>`;
+          }).join("") : `<span style="font-size:12px;color:#9ca3af;">No teams defined yet — add teams in User/Activity tab.</span>`}
+        </div>
 
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Email</label>
         <input id="um-email" type="email" value="${(r[3]||"").replace(/"/g,"&quot;")}" placeholder="name@company.com" style="${F} margin-bottom:14px;"/>
@@ -1797,7 +1821,7 @@ async function doSaveUser(isEdit) {
   const pin   = document.getElementById("um-pin").value.trim();
   const role  = document.getElementById("um-role").value;
   const title = document.getElementById("um-title").value.trim();
-  const team  = document.getElementById("um-team").value.trim();
+  const team  = [...document.querySelectorAll(".um-team-cb:checked")].map(cb => cb.value).join(",");
   const email = document.getElementById("um-email").value.trim();
   const phone = document.getElementById("um-phone").value.trim();
   const errEl = document.getElementById("um-error");
@@ -1996,7 +2020,8 @@ function renderActivityTable(logRows) {
     </div>`;
 
   const usersHTML = renderUsersPanel();
-  el.innerHTML = usersHTML + purgeHTML + logHTML;
+  const teamsHTML = renderTeamsPanel();
+  el.innerHTML = teamsHTML + usersHTML + purgeHTML + logHTML;
 }
 
 function roleBadge(role) {
@@ -2059,9 +2084,7 @@ async function purgeActivityLog() {
   if (statusEl) statusEl.textContent = "Deleting…";
   try {
     toDelete.sort((a, b) => b - a);
-    for (const rowIndex of toDelete) {
-      await deleteRowProxy(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, rowIndex);
-    }
+    await batchDeleteRowProxy(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, toDelete);
     _sDel(ACT_CACHE_KEY); _actLoaded = false;
     await loadActivityLog();
     showToast(`Purged ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} ✓`);
@@ -2217,7 +2240,7 @@ function renderLinkModal() {
   const m = _linkModal; if (!m) return;
   const isEdit  = m.mode === "edit";
   const F       = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
-  const teams   = ["All", ...(SESSION.teams || [])];
+  const teams   = ["All", ...getTeamNames()];
   const teamOpts = teams.map(t => `<option value="${t}"${t===m.team?" selected":""}>${t}</option>`).join("");
 
   document.body.insertAdjacentHTML("beforeend", `
@@ -2845,7 +2868,7 @@ function _openContactModal(contactId) {
   const c      = contactId ? _contacts.find(x => x.contactId === contactId) : null;
   const isEdit = !!c;
   const splitTeams = v => (v||"").split(",").map(t => t.trim()).filter(Boolean);
-  const allTeams   = [...new Set((window._configRows||[]).flatMap(r => splitTeams(r[6])))].sort();
+  const allTeams   = getTeamNames();
   const cTeams     = splitTeams(c?.team || "");
   const hasAll     = cTeams.includes("All") || cTeams.length === 0;
 
@@ -3257,6 +3280,555 @@ async function doAddComment(taskId) {
   }
 }
 
+// ── TEAMS ──────────────────────────────────────────────────────────────────────
+function rowsToTeams(rows) {
+  if (!rows || rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({ rowIndex: i + 2, teamId: r[0]||"", teamName: r[1]||"" })).filter(t => t.teamName);
+}
+
+async function loadTeams() {
+  const cached = _sGet(TEAMS_CACHE_KEY);
+  if (cached) { _teamsList = cached; _teamsLoaded = true; }
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME);
+    _teamsList  = rowsToTeams(rows);
+    _sSet(TEAMS_CACHE_KEY, _teamsList);
+    _teamsLoaded = true;
+  } catch { _teamsLoaded = true; }
+}
+
+// Central helper — always use this instead of deriving team names ad-hoc
+function getTeamNames() {
+  if (_teamsList.length > 0) return _teamsList.map(t => t.teamName);
+  // Fallback: derive from Config rows (backward compatible if Teams sheet not set up yet)
+  return [...new Set((window._configRows||[]).flatMap(r => (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean)))].sort();
+}
+
+function renderTeamsPanel() {
+  const teams = getTeamNames();
+  // Teams that exist in Config but not yet saved to Teams sheet
+  const configOnlyTeams = [...new Set((window._configRows||[]).flatMap(r => (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean)))]
+    .filter(n => !_teamsList.some(t => t.teamName === n));
+
+  const importBanner = _teamsList.length === 0 && configOnlyTeams.length > 0 ? `
+    <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div>
+        <div style="font-size:13px;font-weight:600;color:#92400e;">Existing teams found in your users</div>
+        <div style="font-size:12px;color:#b45309;margin-top:2px;">Import <strong>${configOnlyTeams.join(", ")}</strong> into the Teams master list to manage them here.</div>
+      </div>
+      <button onclick="doImportTeamsFromConfig()"
+        style="background:#d97706;color:#fff;font-size:12px;font-weight:700;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+        Import Teams</button>
+    </div>` : "";
+
+  const rows = teams.map(name => {
+    const memberCount = (window._configRows||[]).filter(r => (r[6]||"").split(",").map(t=>t.trim()).includes(name)).length;
+    const t = _teamsList.find(x => x.teamName === name);
+    const safeName = name.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+    return `
+      <tr style="border-bottom:1px solid #f0fdf4;">
+        <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#1b4332;">${escHtml(name)}</td>
+        <td style="padding:10px 14px;font-size:13px;color:#6b7280;">${memberCount} member${memberCount!==1?"s":""}</td>
+        <td style="padding:10px 14px;">
+          ${t ? `<button onclick="doDeleteTeam('${safeName}')"
+            style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:4px 12px;border-radius:6px;border:1px solid #fecaca;cursor:pointer;">Remove</button>`
+            : `<span style="font-size:11px;color:#f59e0b;">not in master list</span>`}
+        </td>
+      </tr>`;
+  }).join("");
+
+  return `
+    <div style="background:#fff;border-radius:14px;border:1px solid #e5e7eb;padding:20px;margin-bottom:24px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;">Teams <span style="font-size:13px;font-weight:600;background:#d1fae5;color:#1b4332;padding:2px 9px;border-radius:999px;margin-left:6px;">${teams.length}</span></div>
+      </div>
+      ${importBanner}
+      ${teams.length ? `
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <thead><tr style="background:#f9fafb;border-bottom:2px solid #d1fae5;">
+          <th style="padding:8px 14px;text-align:left;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;">Team Name</th>
+          <th style="padding:8px 14px;text-align:left;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;">Members</th>
+          <th style="padding:8px 14px;"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : `<div style="color:#9ca3af;font-size:13px;margin-bottom:14px;">No teams yet. Add your first team below.</div>`}
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="new-team-name" placeholder="Team name (e.g. Peoplesoft)" maxlength="50"
+          style="flex:1;padding:8px 12px;border:1.5px solid #d1fae5;border-radius:8px;font-size:13px;outline:none;"/>
+        <button onclick="doAddTeam()"
+          style="background:#1b4332;color:#fff;font-size:13px;font-weight:600;padding:8px 18px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap;">+ Add Team</button>
+      </div>
+    </div>`;
+}
+
+async function doAddTeam() {
+  const input = document.getElementById("new-team-name");
+  const name  = (input?.value||"").trim();
+  if (!name) { showToast("Enter a team name."); return; }
+  if (getTeamNames().map(n=>n.toLowerCase()).includes(name.toLowerCase())) { showToast("Team already exists."); return; }
+  const maxId = _teamsList.reduce((m, t) => Math.max(m, parseInt((t.teamId||"").replace(/\D/g,""))||0), 0);
+  const id = "TM" + String(maxId + 1).padStart(4, "0");
+  _teamsList.push({ rowIndex: 0, teamId: id, teamName: name });
+  _sSet(TEAMS_CACHE_KEY, _teamsList);
+  if (input) input.value = "";
+  renderActivityTable(_sGet(ACT_CACHE_KEY)||[]);
+  try {
+    await appendRow(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME, [id, name]);
+    const rows = await readSheet(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME);
+    _teamsList = rowsToTeams(rows);
+    _sSet(TEAMS_CACHE_KEY, _teamsList);
+  } catch(e) {
+    _teamsList = _teamsList.filter(t => t.teamId !== id);
+    _sSet(TEAMS_CACHE_KEY, _teamsList);
+    alert("Failed to add team: " + e.message);
+  }
+}
+
+async function doDeleteTeam(name) {
+  const memberCount = (window._configRows||[]).filter(r => (r[6]||"").split(",").map(t=>t.trim()).includes(name)).length;
+  const warn = memberCount > 0 ? `\n\nWarning: ${memberCount} member(s) are currently assigned to this team.` : "";
+  if (!confirm(`Remove team "${name}"?${warn}`)) return;
+  const t = _teamsList.find(x => x.teamName === name);
+  if (!t) return;
+  _teamsList = _teamsList.filter(x => x.teamName !== name);
+  _sSet(TEAMS_CACHE_KEY, _teamsList);
+  renderActivityTable(_sGet(ACT_CACHE_KEY)||[]);
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME, t.rowIndex);
+    const rows = await readSheet(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME);
+    _teamsList = rowsToTeams(rows);
+    _sSet(TEAMS_CACHE_KEY, _teamsList);
+  } catch(e) { alert("Delete failed: " + e.message); loadTeams(); }
+}
+
+async function doImportTeamsFromConfig() {
+  const toImport = [...new Set((window._configRows||[]).flatMap(r => (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean)))]
+    .filter(n => !_teamsList.some(t => t.teamName === n))
+    .sort();
+  if (!toImport.length) { showToast("All existing teams are already in the master list."); return; }
+  showToast(`Importing ${toImport.length} team${toImport.length!==1?"s":""}…`);
+  let maxId = _teamsList.reduce((m, t) => Math.max(m, parseInt((t.teamId||"").replace(/\D/g,""))||0), 0);
+  const newTeams = toImport.map(name => { maxId++; return { rowIndex: 0, teamId: "TM"+String(maxId).padStart(4,"0"), teamName: name }; });
+  _teamsList.push(...newTeams);
+  _sSet(TEAMS_CACHE_KEY, _teamsList);
+  renderActivityTable(_sGet(ACT_CACHE_KEY)||[]);
+  try {
+    for (const t of newTeams) {
+      await appendRow(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME, [t.teamId, t.teamName]);
+    }
+    const rows = await readSheet(CALENDAR_SHEET_ID, TEAMS_SHEET_NAME);
+    _teamsList = rowsToTeams(rows);
+    _sSet(TEAMS_CACHE_KEY, _teamsList);
+    renderActivityTable(_sGet(ACT_CACHE_KEY)||[]);
+    showToast(`Imported: ${toImport.join(", ")} ✓`);
+  } catch(e) {
+    alert("Import failed: " + e.message);
+    loadTeams();
+  }
+}
+
+// ── ONBOARDING ─────────────────────────────────────────────────────────────────
+function rowsToObTemplate(rows) {
+  if (!rows || rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2, templateId: r[0]||"", team: r[1]||"", category: r[2]||"", item: r[3]||""
+  })).filter(t => t.item);
+}
+
+function rowsToObStatus(rows) {
+  if (!rows || rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2, statusId: r[0]||"", memberName: r[1]||"", team: r[2]||"",
+    templateId: r[3]||"", category: r[4]||"", item: r[5]||"",
+    status: r[6]||"Pending", completedDate: r[7]||""
+  })).filter(s => s.memberName && s.item);
+}
+
+async function loadOnboarding() {
+  const ct = _sGet(ONBOARDING_TMPL_KEY), cs = _sGet(ONBOARDING_STATUS_KEY);
+  if (ct) _obTemplate = ct;
+  if (cs) _obStatus   = cs;
+  if (ct && cs) _obLoaded = true;
+  try {
+    const [tr, sr] = await Promise.all([
+      readSheet(CALENDAR_SHEET_ID, ONBOARDING_TMPL_SHEET),
+      readSheet(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET),
+    ]);
+    _obTemplate = rowsToObTemplate(tr);
+    _obStatus   = rowsToObStatus(sr);
+    _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    _obLoaded = true;
+  } catch { _obLoaded = true; }
+}
+
+function renderOnboarding() {
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="ob-main"></div>`);
+  if (!_obLoaded) {
+    document.getElementById("ob-main").innerHTML = `<div class="spinner"></div>`;
+    loadOnboarding().then(_renderObContent);
+  } else {
+    _renderObContent();
+    loadOnboarding().then(_renderObContent); // background refresh
+  }
+}
+
+function _obTeamNames() { return getTeamNames(); }
+
+function _renderObContent() {
+  const el = document.getElementById("ob-main");
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:20px;">
+      <button onclick="_obSetView('checklist')"
+        style="padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;
+               background:${_obView==="checklist"?"#1b4332":"#f0fdf4"};color:${_obView==="checklist"?"#fff":"#1b4332"};">
+        👥 Member Checklists</button>
+      <button onclick="_obSetView('template')"
+        style="padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;
+               background:${_obView==="template"?"#1b4332":"#f0fdf4"};color:${_obView==="template"?"#fff":"#1b4332"};">
+        📋 Manage Templates</button>
+    </div>
+    ${_obView === "checklist" ? _renderObChecklistView() : _renderObTemplateView()}`;
+}
+
+function _obSetView(v) { _obView = v; _renderObContent(); }
+function _obSetTeam(t) { _obActiveTeam = t; _renderObContent(); }
+function _obSelectMember(n) { _obActiveMember = n; _renderObContent(); }
+
+function _renderObChecklistView() {
+  const allMembers = (window._configRows||[]).filter(r => r[0]);
+  const memberList = allMembers.map(r => {
+    const name = r[0], team = (r[6]||"").split(",").map(t=>t.trim()).filter(Boolean).join(", ");
+    const items = _obStatus.filter(s => s.memberName === name);
+    const done  = items.filter(s => s.status === "Done").length;
+    const total = items.length;
+    const pct   = total > 0 ? Math.round(done/total*100) : 0;
+    const active = _obActiveMember === name;
+    return `
+      <div onclick="_obSelectMember('${name.replace(/'/g,"\\'")}') "
+        style="padding:11px 13px;border-radius:10px;cursor:pointer;margin-bottom:5px;
+               background:${active?"#1b4332":"#fff"};border:1.5px solid ${active?"#1b4332":"#e5e7eb"};">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div style="min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:${active?"#fff":"#1b4332"};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(name)}</div>
+            <div style="font-size:11px;color:${active?"#a7f3d0":"#9ca3af"};margin-top:1px;">${escHtml(team)||"No team"}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:11px;font-weight:600;color:${active?"#d1fae5":"#6b7280"};">${total>0?`${done}/${total}`:"—"}</div>
+            ${total>0?`<div style="width:54px;height:4px;background:${active?"rgba(255,255,255,0.25)":"#e5e7eb"};border-radius:2px;margin-top:4px;">
+              <div style="width:${pct}%;height:100%;background:${active?"#6ee7b7":"#1b4332"};border-radius:2px;"></div></div>`:""}
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+
+  const rightPanel = _obActiveMember ? _renderObMemberChecklist(_obActiveMember)
+    : `<div style="text-align:center;color:#9ca3af;padding:60px 20px;font-size:13px;">← Select a team member to view their checklist</div>`;
+
+  return `
+    <div style="display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start;">
+      <div style="background:#f9fafb;border-radius:12px;padding:12px;border:1px solid #e5e7eb;max-height:75vh;overflow-y:auto;">
+        <div style="font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">All Members</div>
+        ${memberList}
+      </div>
+      <div id="ob-right-panel">${rightPanel}</div>
+    </div>`;
+}
+
+function _renderObMemberChecklist(memberName) {
+  const mc = (window._configRows||[]).find(r => r[0] === memberName);
+  const memberTeams = (mc?.[6]||"").split(",").map(t=>t.trim()).filter(Boolean);
+  const items = _obStatus.filter(s => s.memberName === memberName);
+  const done  = items.filter(s => s.status === "Done").length;
+  const total = items.length;
+  const pct   = total > 0 ? Math.round(done/total*100) : 0;
+  const hasTemplate = _obTemplate.some(t => memberTeams.includes(t.team));
+
+  // group by category
+  const byCat = {};
+  items.forEach(s => { (byCat[s.category||"General"] = byCat[s.category||"General"]||[]).push(s); });
+
+  const progressBar = total > 0 ? `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+      <div style="flex:1;height:6px;background:#e5e7eb;border-radius:3px;">
+        <div style="width:${pct}%;height:100%;background:${pct===100?"#16a34a":"#1b4332"};border-radius:3px;transition:width 0.3s;"></div>
+      </div>
+      <span style="font-size:12px;font-weight:600;color:${pct===100?"#16a34a":"#1b4332"};white-space:nowrap;">${done}/${total} complete${pct===100?" ✓":""}</span>
+    </div>` : "";
+
+  const categoryHTML = Object.entries(byCat).map(([cat, catItems]) => {
+    const catDone = catItems.filter(s => s.status === "Done").length;
+    return `
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;">
+          <span style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;">${escHtml(cat)}</span>
+          <span style="font-size:10px;color:#9ca3af;">${catDone}/${catItems.length}</span>
+        </div>
+        ${catItems.map(s => {
+          const isDone   = s.status === "Done";
+          const safeName = memberName.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+          const isCustom = s.templateId === "custom";
+          const teamLabel = isCustom ? "Custom" : (s.team || "");
+          const teamBg    = isCustom ? "#f3f4f6" : "#dbeafe";
+          const teamFg    = isCustom ? "#6b7280" : "#1d4ed8";
+          return `
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;
+                 background:${isDone?"#f0fdf4":"#fafafa"};border:1px solid ${isDone?"#d1fae5":"#e5e7eb"};margin-bottom:5px;">
+              <input type="checkbox" ${isDone?"checked":""} onchange="obToggleItem('${s.statusId}','${safeName}')"
+                style="width:16px;height:16px;cursor:pointer;accent-color:#1b4332;flex-shrink:0;margin-top:2px;"/>
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+                  <span style="font-size:13px;color:${isDone?"#9ca3af":"#1b4332"};${isDone?"text-decoration:line-through;":""}">${escHtml(s.item)}</span>
+                  ${teamLabel?`<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:${teamBg};color:${teamFg};flex-shrink:0;">${escHtml(teamLabel)}</span>`:""}
+                </div>
+                ${isDone&&s.completedDate?`<div style="font-size:11px;color:#9ca3af;margin-top:2px;">Done ${s.completedDate}</div>`:""}
+              </div>
+              <button onclick="obDeleteStatusItem('${s.statusId}','${safeName}')"
+                title="Remove" style="background:none;border:none;cursor:pointer;color:#d1d5db;font-size:16px;padding:0 2px;flex-shrink:0;line-height:1;">×</button>
+            </div>`;
+        }).join("")}
+      </div>`;
+  }).join("");
+
+  const emptyState = !items.length ? `
+    <div style="text-align:center;padding:32px;color:#9ca3af;font-size:13px;background:#f9fafb;border-radius:10px;">
+      ${hasTemplate ? 'No checklist yet — click <strong style="color:#1b4332;">Initialize from template</strong> to get started.' : 'No template for this member\'s team yet. Use <em>Manage Templates</em> to create one, or add items manually.'}
+    </div>` : "";
+
+  // Inline add-item form
+  const addForm = `
+    <div id="ob-add-form" style="display:none;background:#f0fdf4;border:1.5px solid #d1fae5;border-radius:10px;padding:12px;margin-top:12px;">
+      <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;">
+        <input id="ob-add-cat" placeholder="Category" list="ob-cat-list"
+          style="padding:7px 10px;border:1.5px solid #d1fae5;border-radius:7px;font-size:13px;outline:none;"/>
+        <datalist id="ob-cat-list">${[...new Set(items.map(s=>s.category).filter(Boolean))].map(c=>`<option value="${escHtml(c)}">`).join("")}</datalist>
+        <input id="ob-add-item" placeholder="Item description"
+          style="padding:7px 10px;border:1.5px solid #d1fae5;border-radius:7px;font-size:13px;outline:none;"/>
+        <button onclick="obSaveCustomItem('${memberName.replace(/'/g,"\\'")}') "
+          style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 14px;border-radius:7px;border:none;cursor:pointer;white-space:nowrap;">Add</button>
+      </div>
+    </div>`;
+
+  return `
+    <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:20px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#1b4332;">${escHtml(memberName)}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">${memberTeams.join(", ")||"No team"}</div>
+        </div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;">
+          ${hasTemplate?`<button onclick="obInitializeMember('${memberName.replace(/'/g,"\\'")}') "
+            style="background:${items.length?"#f0fdf4":"#1b4332"};color:${items.length?"#1b4332":"#fff"};font-size:12px;font-weight:600;
+                   padding:6px 13px;border-radius:7px;border:1.5px solid ${items.length?"#d1fae5":"#1b4332"};cursor:pointer;">
+            ${items.length?"↻ Sync template":"+ Initialize from template"}</button>`:""}
+          <button onclick="document.getElementById('ob-add-form').style.display=document.getElementById('ob-add-form').style.display==='none'?'block':'none'"
+            style="background:#f9fafb;color:#374151;font-size:12px;font-weight:600;padding:6px 13px;border-radius:7px;border:1.5px solid #e5e7eb;cursor:pointer;">
+            + Add item</button>
+        </div>
+      </div>
+      ${progressBar}
+      ${emptyState}
+      ${categoryHTML}
+      ${addForm}
+    </div>`;
+}
+
+function _renderObTemplateView() {
+  const teamNames = _obTeamNames();
+  if (!_obActiveTeam && teamNames.length > 0) _obActiveTeam = teamNames[0];
+
+  const teamTabs = teamNames.map(t => `
+    <button onclick="_obSetTeam('${t.replace(/'/g,"\\'")}') "
+      style="padding:6px 16px;border-radius:7px;font-size:12px;font-weight:600;border:none;cursor:pointer;
+             background:${_obActiveTeam===t?"#1b4332":"#f0fdf4"};color:${_obActiveTeam===t?"#fff":"#1b4332"};">
+      ${escHtml(t)}</button>`).join("");
+
+  const teamItems = _obTemplate.filter(t => t.team === _obActiveTeam);
+  const byCat = {};
+  teamItems.forEach(t => { (byCat[t.category||"General"] = byCat[t.category||"General"]||[]).push(t); });
+
+  const categoryHTML = Object.entries(byCat).map(([cat, items]) => `
+    <div style="margin-bottom:18px;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:7px;">${escHtml(cat)}</div>
+      ${items.map(t => `
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f9fafb;
+             border:1px solid #e5e7eb;border-radius:8px;margin-bottom:5px;">
+          <span style="font-size:11px;font-weight:600;color:#1b4332;background:#d1fae5;padding:2px 8px;
+                border-radius:999px;white-space:nowrap;flex-shrink:0;">${escHtml(t.category||"General")}</span>
+          <span style="flex:1;font-size:13px;color:#374151;">${escHtml(t.item)}</span>
+          <button onclick="obDeleteTemplate('${t.templateId}')"
+            title="Delete" style="background:none;border:none;cursor:pointer;color:#d1d5db;font-size:16px;padding:0 2px;line-height:1;">×</button>
+        </div>`).join("")}
+    </div>`).join("");
+
+  return `
+    <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:20px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+        <span style="font-size:15px;font-weight:700;color:#1b4332;">Checklist Templates</span>
+        <span style="font-size:12px;color:#6b7280;">Define default items per team — applied when initializing a member's checklist</span>
+      </div>
+      ${teamNames.length ? `<div style="display:flex;gap:7px;margin-bottom:18px;flex-wrap:wrap;">${teamTabs}</div>` :
+        `<div style="color:#9ca3af;font-size:13px;padding:16px 0;">No teams found — add team names to users in Config first.</div>`}
+      ${teamItems.length===0&&_obActiveTeam ? `<div style="color:#9ca3af;font-size:13px;padding:20px 0;text-align:center;">No items for <strong>${escHtml(_obActiveTeam)}</strong> yet.</div>` : categoryHTML}
+      <div style="background:#f0fdf4;border-radius:10px;border:1px solid #d1fae5;padding:14px;margin-top:8px;">
+        <div style="font-size:12px;font-weight:600;color:#1b4332;margin-bottom:10px;">+ Add template item for <em>${escHtml(_obActiveTeam||"—")}</em></div>
+        <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;">
+          <input id="ob-new-cat" placeholder="Category (IT, HR, Access…)" list="ob-tmpl-cat-list"
+            style="padding:8px 10px;border:1.5px solid #d1fae5;border-radius:7px;font-size:13px;outline:none;"/>
+          <datalist id="ob-tmpl-cat-list">${[...new Set(teamItems.map(t=>t.category).filter(Boolean))].map(c=>`<option value="${escHtml(c)}">`).join("")}</datalist>
+          <input id="ob-new-item" placeholder="Item (e.g. Provide laptop)"
+            style="padding:8px 10px;border:1.5px solid #d1fae5;border-radius:7px;font-size:13px;outline:none;"/>
+          <button onclick="obAddTemplateItem()"
+            style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:8px 16px;border-radius:7px;border:none;cursor:pointer;white-space:nowrap;">
+            Add</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function obToggleItem(statusId, memberName) {
+  const s = _obStatus.find(x => x.statusId === statusId);
+  if (!s) return;
+  const newStatus = s.status === "Done" ? "Pending" : "Done";
+  const now = new Date();
+  const completedDate = newStatus === "Done"
+    ? now.toLocaleDateString("en-US") : "";
+  s.status = newStatus; s.completedDate = completedDate;
+  _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+  const panel = document.getElementById("ob-right-panel");
+  if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+  try {
+    await updateRow(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET, s.rowIndex,
+      [s.statusId, s.memberName, s.team, s.templateId, s.category, s.item, newStatus, completedDate]);
+  } catch(e) {
+    s.status = newStatus === "Done" ? "Pending" : "Done"; s.completedDate = "";
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    showToast("Update failed: " + e.message);
+  }
+}
+
+async function obInitializeMember(memberName) {
+  const mc = (window._configRows||[]).find(r => r[0] === memberName);
+  const memberTeams = (mc?.[6]||"").split(",").map(t=>t.trim()).filter(Boolean);
+  const existing = new Set(_obStatus.filter(s => s.memberName === memberName).map(s => s.templateId));
+  const toAdd = _obTemplate.filter(t => memberTeams.includes(t.team) && !existing.has(t.templateId));
+  if (!toAdd.length) { showToast("All template items are already in this member's checklist."); return; }
+  let maxId = _obStatus.reduce((m, s) => Math.max(m, parseInt((s.statusId||"").replace(/\D/g,""))||0), 0);
+  const newItems = toAdd.map(t => {
+    maxId++;
+    return { rowIndex: 0, statusId: "OS"+String(maxId).padStart(4,"0"), memberName, team: t.team,
+      templateId: t.templateId, category: t.category, item: t.item, status: "Pending", completedDate: "" };
+  });
+  _obStatus.push(...newItems);
+  _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+  const panel = document.getElementById("ob-right-panel");
+  if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+  showToast(`Adding ${newItems.length} item${newItems.length!==1?"s":""}…`);
+  try {
+    for (const item of newItems) {
+      await appendRow(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET,
+        [item.statusId, item.memberName, item.team, item.templateId, item.category, item.item, "Pending", ""]);
+    }
+    const rows = await readSheet(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET);
+    _obStatus = rowsToObStatus(rows);
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+    showToast(`${newItems.length} item${newItems.length!==1?"s":""} added ✓`);
+  } catch(e) {
+    const ids = new Set(newItems.map(i => i.statusId));
+    _obStatus = _obStatus.filter(s => !ids.has(s.statusId));
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+    alert("Failed to initialize: " + e.message);
+  }
+}
+
+async function obSaveCustomItem(memberName) {
+  const catEl  = document.getElementById("ob-add-cat");
+  const itemEl = document.getElementById("ob-add-item");
+  const cat  = (catEl?.value||"").trim();
+  const item = (itemEl?.value||"").trim();
+  if (!cat || !item) { showToast("Category and item are required."); return; }
+  const mc = (window._configRows||[]).find(r => r[0] === memberName);
+  const team = (mc?.[6]||"").split(",")[0]?.trim()||"";
+  const maxId = _obStatus.reduce((m, s) => Math.max(m, parseInt((s.statusId||"").replace(/\D/g,""))||0), 0);
+  const id = "OS" + String(maxId + 1).padStart(4, "0");
+  const newItem = { rowIndex: 0, statusId: id, memberName, team, templateId: "custom", category: cat, item, status: "Pending", completedDate: "" };
+  _obStatus.push(newItem);
+  _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+  const panel = document.getElementById("ob-right-panel");
+  if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+  try {
+    await appendRow(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET, [id, memberName, team, "custom", cat, item, "Pending", ""]);
+    const rows = await readSheet(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET);
+    _obStatus = rowsToObStatus(rows);
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    if (document.getElementById("ob-right-panel")) document.getElementById("ob-right-panel").innerHTML = _renderObMemberChecklist(memberName);
+  } catch(e) {
+    _obStatus = _obStatus.filter(s => s.statusId !== id);
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+    if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+    alert("Failed to save: " + e.message);
+  }
+}
+
+async function obDeleteStatusItem(statusId, memberName) {
+  const s = _obStatus.find(x => x.statusId === statusId);
+  if (!s || !confirm(`Remove "${s.item}" from ${memberName.split(" ")[0]}'s checklist?`)) return;
+  _obStatus = _obStatus.filter(x => x.statusId !== statusId);
+  _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+  const panel = document.getElementById("ob-right-panel");
+  if (panel) panel.innerHTML = _renderObMemberChecklist(memberName);
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET, s.rowIndex);
+    const rows = await readSheet(CALENDAR_SHEET_ID, ONBOARDING_STATUS_SHEET);
+    _obStatus = rowsToObStatus(rows);
+    _sSet(ONBOARDING_STATUS_KEY, _obStatus);
+  } catch(e) { alert("Delete failed: " + e.message); loadOnboarding(); }
+}
+
+async function obAddTemplateItem() {
+  const cat  = (document.getElementById("ob-new-cat")?.value||"").trim();
+  const item = (document.getElementById("ob-new-item")?.value||"").trim();
+  if (!cat || !item) { showToast("Category and item are required."); return; }
+  if (!_obActiveTeam)  { showToast("Select a team first."); return; }
+  const maxId = _obTemplate.reduce((m, t) => Math.max(m, parseInt((t.templateId||"").replace(/\D/g,""))||0), 0);
+  const id = "OT" + String(maxId + 1).padStart(4, "0");
+  const newItem = { rowIndex: 0, templateId: id, team: _obActiveTeam, category: cat, item };
+  _obTemplate.push(newItem);
+  _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+  _renderObContent();
+  try {
+    await appendRow(CALENDAR_SHEET_ID, ONBOARDING_TMPL_SHEET, [id, _obActiveTeam, cat, item]);
+    const rows = await readSheet(CALENDAR_SHEET_ID, ONBOARDING_TMPL_SHEET);
+    _obTemplate = rowsToObTemplate(rows);
+    _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+  } catch(e) {
+    _obTemplate = _obTemplate.filter(t => t.templateId !== id);
+    _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+    _renderObContent();
+    alert("Failed to add: " + e.message);
+  }
+}
+
+async function obDeleteTemplate(templateId) {
+  const t = _obTemplate.find(x => x.templateId === templateId);
+  if (!t || !confirm(`Delete template item "${t.item}"?`)) return;
+  _obTemplate = _obTemplate.filter(x => x.templateId !== templateId);
+  _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+  _renderObContent();
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, ONBOARDING_TMPL_SHEET, t.rowIndex);
+    const rows = await readSheet(CALENDAR_SHEET_ID, ONBOARDING_TMPL_SHEET);
+    _obTemplate = rowsToObTemplate(rows);
+    _sSet(ONBOARDING_TMPL_KEY, _obTemplate);
+  } catch(e) {
+    alert("Delete failed: " + e.message);
+    loadOnboarding();
+  }
+}
+
 // ── TEAM EVENTS CALENDAR ───────────────────────────────────────────────────────
 function rowsToTeamEvents(rows) {
   if (rows.length < 2) return [];
@@ -3417,7 +3989,7 @@ function renderTEventsGrid() {
   const legend = legendItems.length ? `
     <div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 14px;border-top:1px solid #f3f4f6;">${legendItems.join("")}</div>` : "";
 
-  const availTeams = SESSION.role==="Manager"?(SESSION.teams||[]):(SESSION.teams||[]);
+  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
   const el = document.getElementById("events-main");
   if (!el) return;
   el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
@@ -3493,7 +4065,7 @@ function renderTEventsYearView() {
     </div>`;
   });
 
-  const availTeams = SESSION.role==="Manager"?(SESSION.teams||[]):(SESSION.teams||[]);
+  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
   const el = document.getElementById("events-main");
   if (!el) return;
   el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
@@ -3529,7 +4101,7 @@ function renderTeamEventModal() {
   const m  = _teamEventModal; if (!m) return;
   const isEdit = m.mode==="edit";
   const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
-  const availTeams = SESSION.role==="Manager" ? (SESSION.teams||[]) : (SESSION.teams||[]);
+  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
   const teamOpts = availTeams.map(t=>`<option value="${t}"${t===m.team?" selected":""}>${t}</option>`).join("");
   const canPickTeam = availTeams.length > 1;
 
