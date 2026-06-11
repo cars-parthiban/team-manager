@@ -45,6 +45,7 @@ const ACCOUNT_STATUS_SHEET_NAME = "Account_Status";
 const TEAM_LINKS_SHEET_NAME     = "Team_Links";
 const TEAM_EVENTS_SHEET_NAME    = "Team_Events";
 const ARCHIVE_SHEET_NAME        = "Archive";
+const CONTACTS_SHEET_NAME       = "Contacts";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -128,6 +129,9 @@ function isOverdue(d) {
   const today = new Date(); today.setHours(0,0,0,0);
   return due < today;
 }
+function escHtml(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
 function formatTimestamp(ts) {
   if (!ts) return "";
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -189,6 +193,7 @@ let _activeTab     = "tasks";
 let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date().getMonth(), _calModal = null, _calView = "month";
 let _calLoaded = false;
 let _actLoaded = false;
+let _contactsLoaded = false;
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
@@ -250,12 +255,29 @@ function rowsToAccountStatus(rows) {
   return out;
 }
 
+function _onLoginNameChange() {
+  document.getElementById("inp-pin").value = "";
+  const errEl = document.getElementById("login-error");
+  const btn   = document.getElementById("btn-signin");
+  if (btn) { btn.disabled = false; btn.style.opacity = "1"; btn.textContent = "Sign In"; }
+  const name = document.getElementById("sel-name")?.value;
+  const acct = name ? (window._accountStatus || {})[name] : null;
+  if (acct && acct.locked) {
+    const msg = acct.failed >= 3
+      ? "Your account is locked after too many failed attempts. Please contact your manager."
+      : "Your account is not active. Please contact your manager.";
+    if (errEl) errEl.innerHTML = errorBox(msg);
+  } else {
+    if (errEl) errEl.innerHTML = "";
+  }
+}
+
 function _renderLoginForm(names) {
   const lb = document.getElementById("login-body");
   if (!lb) return;
   lb.innerHTML = `
     <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Your Name</label>
-    <select id="sel-name" style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1.5px solid #d1fae5;font-size:14px;color:#1b4332;background:#f0fdf4;outline:none;appearance:none;">
+    <select id="sel-name" onchange="_onLoginNameChange()" style="width:100%;padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1.5px solid #d1fae5;font-size:14px;color:#1b4332;background:#f0fdf4;outline:none;appearance:none;">
       <option value="">— Select your name —</option>
       ${names.map(n=>`<option value="${n}">${n}</option>`).join("")}
     </select>
@@ -337,7 +359,10 @@ async function doLogin() {
 
   const acct = window._accountStatus[name];
   if (acct && acct.locked) {
-    errEl.innerHTML = errorBox("Your account is locked after too many failed attempts. Please contact your manager.");
+    const msg = acct.failed >= 3
+      ? "Your account is locked after too many failed attempts. Please contact your manager."
+      : "Your account is not active. Please contact your manager.";
+    errEl.innerHTML = errorBox(msg);
     if (btnEl) { btnEl.disabled = true; btnEl.style.opacity = "0.5"; }
     return;
   }
@@ -468,14 +493,15 @@ function prefetchAllTabs() {
   if (SESSION && SESSION.role === "Manager") {
     fetches.push(loadActivityLog().catch(() => {}));
   }
+  fetches.push(loadContacts().catch(() => {}));
   Promise.all(fetches); // fire and forget — never blocks the UI
 }
 
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
-  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY);
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY);
   // Reset loaded flags so tabs re-fetch on next visit
-  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false;
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false;
   // Keep in-memory data — render is instant, background refresh updates silently
   render();
   showToast("Refreshing in background…");
@@ -500,9 +526,10 @@ function setCachedTasks(tasks) {
 }
 function clearTasksCache() { try { localStorage.removeItem(_tasksCacheKey()); } catch {} }
 
-const CAL_CACHE_KEY     = "tmgr_cal";
-const ACT_CACHE_KEY     = "tmgr_act";
-const ARCHIVE_CACHE_KEY = "tmgr_archive";
+const CAL_CACHE_KEY      = "tmgr_cal";
+const ACT_CACHE_KEY      = "tmgr_act";
+const ARCHIVE_CACHE_KEY  = "tmgr_archive";
+const CONTACTS_CACHE_KEY = "tmgr_contacts";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
@@ -511,6 +538,7 @@ let _memberEditingTask = null;
 function renderMember() {
   if (_activeTab === "calendar")   { renderCalendar();     return; }
   if (_activeTab === "links")      { renderLinks();        return; }
+  if (_activeTab === "contacts")   { renderContacts();     return; }
   if (_activeTab === "events")     { renderTeamEvents();   return; }
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
@@ -746,6 +774,7 @@ function renderManager() {
   if (_activeTab === "calendar")   { renderCalendar();     return; }
   if (_activeTab === "activity")   { renderActivity();     return; }
   if (_activeTab === "links")      { renderLinks();        return; }
+  if (_activeTab === "contacts")   { renderContacts();     return; }
   if (_activeTab === "events")     { renderTeamEvents();   return; }
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
@@ -1188,7 +1217,7 @@ function closeAddTaskModal() {
 
 // ── CALENDAR ───────────────────────────────────────────────────────────────────
 function tabBarHTML() {
-  const tabs = [["tasks","Tasks"],["calendar","Absence Calendar"],["links","Links"]];
+  const tabs = [["tasks","Tasks"],["calendar","Absence Calendar"],["links","Links"],["contacts","Contacts"]];
   if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
   if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
@@ -1638,21 +1667,33 @@ async function doDeleteCalEvent(rowIndex) {
 function renderUsersPanel() {
   const users = (window._configRows || []).filter(r => r[0]);
   const rows = users.map((r, i) => {
-    const name = r[0], role = r[2], title = r[4]||"", team = r[5]||"";
-    const teams = team.split(",").map(t=>t.trim()).filter(Boolean);
+    const name   = r[0], role = r[2], title = r[5]||"", team = r[6]||"";
+    const status = (window._accountStatus || {})[name] || { failed: 0, locked: false };
+    const teams  = team.split(",").map(t=>t.trim()).filter(Boolean);
     const teamBadges = teams.map(t => {
       const tc = teamColor(t);
       return `<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};">${t}</span>`;
     }).join(" ");
+    const attemptsBadge = status.failed > 0
+      ? `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;background:${status.failed>=3?"#fff1f2":"#fef9c3"};color:${status.failed>=3?"#dc2626":"#92400e"};border:1px solid ${status.failed>=3?"#fca5a5":"#fde68a"};">${status.failed}</span>`
+      : `<span style="font-size:12px;color:#9ca3af;">0</span>`;
+    const safeName = name.replace(/'/g,"&#39;");
+    const lockBtn = status.locked
+      ? `<button onclick="unlockAccount('${safeName}')"
+           style="background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #bbf7d0;cursor:pointer;margin-right:4px;">🔓 Unlock</button>`
+      : `<button onclick="lockAccount('${safeName}')"
+           style="background:#fff7ed;color:#c2410c;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #fed7aa;cursor:pointer;margin-right:4px;">🔒 Lock</button>`;
     return `<tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f0fdf4;">
       <td style="padding:9px 14px;font-weight:600;color:#1b4332;">${name}</td>
       <td style="padding:9px 14px;">${roleBadge(role)}</td>
       <td style="padding:9px 14px;font-size:12px;color:#6b7280;">${title}</td>
       <td style="padding:9px 14px;">${teamBadges}</td>
+      <td style="padding:9px 14px;text-align:center;">${attemptsBadge}</td>
       <td style="padding:9px 14px;white-space:nowrap;">
-        <button onclick="openEditUserModal('${name.replace(/'/g,"&#39;")}')"
+        ${lockBtn}
+        <button onclick="openEditUserModal('${safeName}')"
           style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #d1fae5;cursor:pointer;margin-right:4px;">Edit</button>
-        <button onclick="doRemoveUser('${name.replace(/'/g,"&#39;")}')"
+        <button onclick="doRemoveUser('${safeName}')"
           style="background:#fff1f2;color:#dc2626;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;cursor:pointer;">Remove</button>
       </td>
     </tr>`;
@@ -1671,9 +1712,9 @@ function renderUsersPanel() {
       <div style="overflow-x:auto;">
         <table style="width:100%;font-size:13px;">
           <thead><tr style="background:#f9fafb;">
-            ${["Name","Role","Title","Team","Actions"].map(h=>`<th style="padding:9px 14px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">${h}</th>`).join("")}
+            ${["Name","Role","Title","Team","Attempts","Actions"].map(h=>`<th style="padding:9px 14px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">${h}</th>`).join("")}
           </tr></thead>
-          <tbody>${rows || `<tr><td colspan="5" style="padding:2rem;text-align:center;color:#9ca3af;">No users found.</td></tr>`}</tbody>
+          <tbody>${rows || `<tr><td colspan="6" style="padding:2rem;text-align:center;color:#9ca3af;">No users found.</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
@@ -1860,9 +1901,33 @@ async function _bgRefreshActivity() {
 }
 
 async function unlockAccount(name) {
-  _sDel(ACT_CACHE_KEY); _actLoaded = false;
-  await resetAccountStatus(name);
+  await resetAccountStatus(name); // updates _accountStatus in-memory immediately
   showToast(`${name.split(" ")[0]}'s account unlocked`);
+  const cached = _sGet(ACT_CACHE_KEY);
+  if (cached) renderActivityTable(cached); // instant re-render with updated status
+  _sDel(ACT_CACHE_KEY); _actLoaded = false;
+  loadActivityLog(); // background sync
+}
+
+async function lockAccount(name) {
+  const s      = (window._accountStatus || {})[name];
+  const failed = 0; // manual lock — reset attempts so it's distinguished from auto-lockout
+  lsSetUser(name, { failed, locked: true });
+  if (!window._accountStatus) window._accountStatus = {};
+  window._accountStatus[name] = { ...(s || { rowIndex: null }), failed, locked: true };
+  showToast(`${name.split(" ")[0]}'s account locked`);
+  const cached = _sGet(ACT_CACHE_KEY);
+  if (cached) renderActivityTable(cached); // instant re-render
+  try {
+    if (s?.rowIndex) {
+      await updateRow(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME, s.rowIndex, [name, String(failed), "TRUE"]);
+    } else {
+      await appendRow(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME, [name, String(failed), "TRUE"]);
+      const rows = await readSheet(CALENDAR_SHEET_ID, ACCOUNT_STATUS_SHEET_NAME);
+      window._accountStatus = rowsToAccountStatus(rows);
+    }
+  } catch {}
+  _sDel(ACT_CACHE_KEY); _actLoaded = false;
   loadActivityLog();
 }
 
@@ -1870,27 +1935,6 @@ function renderActivityTable(logRows) {
   const el = document.getElementById("activity-main");
   if (!el) return;
 
-  const locked = Object.entries(window._accountStatus || {}).filter(([,s]) => s.locked);
-  const lockedHTML = locked.length ? `
-    <div style="background:#fff;border-radius:14px;border:1.5px solid #fca5a5;overflow:hidden;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:8px;padding:12px 20px;border-bottom:1px solid #fee2e2;background:#fff1f2;">
-        <span style="font-size:13px;font-weight:700;color:#dc2626;">Locked Accounts</span>
-        <span style="font-size:11px;font-weight:600;background:#dc2626;color:#fff;padding:1px 7px;border-radius:999px;">${locked.length}</span>
-      </div>
-      <div style="padding:12px 20px;display:flex;flex-wrap:wrap;gap:10px;">
-        ${locked.map(([name]) => `
-          <div style="display:flex;align-items:center;gap:10px;background:#fafafa;border:1px solid #f3f4f6;border-radius:10px;padding:8px 14px;">
-            <div>
-              <div style="font-size:13px;font-weight:600;color:#374151;">${name}</div>
-              <div style="font-size:11px;color:#dc2626;margin-top:1px;">Locked — 3 failed attempts</div>
-            </div>
-            <button onclick="unlockAccount('${name}')"
-              style="background:#1b4332;color:#fff;font-size:11px;font-weight:600;padding:5px 12px;border-radius:7px;border:none;cursor:pointer;white-space:nowrap;">
-              Unlock
-            </button>
-          </div>`).join("")}
-      </div>
-    </div>` : "";
 
   const dataRows = logRows.length > 1 ? logRows.slice(1).reverse() : [];
   const _toInputDate = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -1939,7 +1983,7 @@ function renderActivityTable(logRows) {
     </div>`;
 
   const usersHTML = renderUsersPanel();
-  el.innerHTML = usersHTML + lockedHTML + purgeHTML + logHTML;
+  el.innerHTML = usersHTML + purgeHTML + logHTML;
 }
 
 function roleBadge(role) {
@@ -2514,6 +2558,398 @@ function returnToManager() {
   _proxySession = null;
   _activeTab = "tasks";
   render();
+}
+
+// ── CONTACTS ───────────────────────────────────────────────────────────────────
+let _contacts     = [];
+let _contactModal = null;
+let _cDragId      = null;
+
+function rowsToContacts(rows) {
+  if (!rows || rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex:    i + 2,
+    contactId:   r[0] || "",
+    team:        r[1] || "All",
+    vendor:      r[2] || "",
+    contactName: r[3] || "",
+    phone:       r[4] || "",
+    email:       r[5] || "",
+    url:         r[6] || "",
+    notes:       r[7] || "",
+    _expanded:   false,
+  })).filter(c => c.vendor || c.contactName);
+}
+
+function nextContactId(contacts) {
+  const max = (contacts || []).reduce((m, c) => Math.max(m, parseInt((c.contactId || "").replace(/\D/g,""))||0), 0);
+  return "C" + String(max + 1).padStart(3, "0");
+}
+
+function _contactSortOrder() {
+  try { return JSON.parse(localStorage.getItem("tmgr_contacts_order") || "null"); } catch { return null; }
+}
+function _saveContactSortOrder(ids) {
+  try { localStorage.setItem("tmgr_contacts_order", JSON.stringify(ids)); } catch {}
+}
+
+function _visibleContacts() {
+  const isManager = SESSION.role === "Manager";
+  let list = isManager ? [..._contacts] : _contacts.filter(c => {
+    const ct = (c.team || "").split(",").map(t => t.trim());
+    return ct.includes("All") || (SESSION.teams || []).some(t => ct.includes(t));
+  });
+  const order = _contactSortOrder();
+  if (order && order.length) {
+    const map = new Map(order.map((id, i) => [id, i]));
+    list.sort((a, b) => (map.has(a.contactId) ? map.get(a.contactId) : 9999) - (map.has(b.contactId) ? map.get(b.contactId) : 9999));
+  }
+  return list;
+}
+
+function renderContacts() {
+  document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
+    tabBarHTML() + `<div id="contacts-main"></div>`);
+  if (_contactsLoaded) {
+    renderContactsView();
+    _bgRefreshContacts();
+  } else {
+    document.getElementById("contacts-main").innerHTML = `<div class="spinner"></div>`;
+    loadContacts();
+  }
+}
+
+async function loadContacts() {
+  const cached = _sGet(CONTACTS_CACHE_KEY);
+  if (cached) { _contacts = cached; _contactsLoaded = true; renderContactsView(); }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME);
+    const fresh = rowsToContacts(rows);
+    _sSet(CONTACTS_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_contacts)) { _contacts = fresh; renderContactsView(); }
+    _contactsLoaded = true;
+  } catch(e) {
+    if (!_contactsLoaded) {
+      const el = document.getElementById("contacts-main");
+      if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load contacts: ${e.message}</div>`;
+    }
+  }
+}
+
+async function _bgRefreshContacts() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME);
+    const fresh = rowsToContacts(rows);
+    const prev  = _sGet(CONTACTS_CACHE_KEY);
+    _sSet(CONTACTS_CACHE_KEY, fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(prev)) { _contacts = fresh; renderContactsView(); }
+  } catch {}
+}
+
+function renderContactsView() {
+  const el = document.getElementById("contacts-main");
+  if (!el) return;
+  const isManager = SESSION.role === "Manager";
+  const list = _visibleContacts();
+
+  const addBtn = isManager
+    ? `<button onclick="openAddContactModal()" style="background:#16a34a;color:#fff;font-size:13px;font-weight:600;padding:8px 18px;border-radius:10px;border:none;cursor:pointer;">+ Add Contact</button>`
+    : "";
+
+  const thS = "padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;white-space:nowrap;";
+  const tableHTML = list.length === 0
+    ? `<div style="padding:3rem;text-align:center;color:#9ca3af;font-size:14px;">No vendor contacts found.</div>`
+    : `<div style="overflow-x:auto;"><table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <thead><tr style="background:#f0fdf4;">
+          ${isManager ? `<th style="${thS}width:28px;"></th>` : ""}
+          <th style="${thS}">Vendor</th>
+          <th style="${thS}">Contact Name</th>
+          <th style="${thS}">Phone</th>
+          <th style="${thS}">Email</th>
+          <th style="${thS}">URL</th>
+          <th style="${thS}">Notes</th>
+          ${isManager ? `<th style="${thS}width:100px;"></th>` : ""}
+        </tr></thead>
+        <tbody id="contacts-tbody">
+          ${list.map((c, i) => _contactRowHTML(c, i, isManager)).join("")}
+        </tbody>
+      </table></div>`;
+
+  el.innerHTML = `
+    <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;padding:20px;margin:16px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <span style="font-size:16px;font-weight:700;color:#1b4332;">Vendor Contacts</span>
+          <span style="margin-left:10px;font-size:12px;color:#9ca3af;">${list.length} contact${list.length!==1?"s":""}</span>
+        </div>
+        ${addBtn}
+      </div>
+      ${tableHTML}
+    </div>`;
+}
+
+function _contactRowHTML(c, idx, isManager) {
+  const bg  = idx % 2 === 0 ? "#fff" : "#fafafa";
+  const td  = "padding:10px 12px;vertical-align:middle;border-bottom:1px solid #f0fdf4;";
+
+  const drag = isManager
+    ? `<td style="${td}cursor:grab;color:#d1d5db;text-align:center;user-select:none;"
+         draggable="true"
+         ondragstart="_cDragStart(event,'${c.contactId}')"
+         ondragover="event.preventDefault();event.currentTarget.closest('tr').style.outline='2px solid #16a34a'"
+         ondragleave="event.currentTarget.closest('tr').style.outline=''"
+         ondrop="_cDrop(event,'${c.contactId}')">⠿</td>`
+    : "";
+
+  const phone = c.phone
+    ? `<a href="tel:${escHtml(c.phone)}" style="color:#374151;text-decoration:none;white-space:nowrap;">${escHtml(c.phone)}</a>`
+    : `<span style="color:#d1d5db;">—</span>`;
+
+  const email = c.email
+    ? `<a href="mailto:${escHtml(c.email)}" style="color:#1d4ed8;">${escHtml(c.email)}</a>`
+    : `<span style="color:#d1d5db;">—</span>`;
+
+  const urlShort = c.url ? c.url.replace(/^https?:\/\//,"").substring(0,28) + (c.url.length>35?"…":"") : "";
+  const urlCell = `<div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap;">
+    ${isManager ? `<button onclick="openUrlEditPopup('${c.contactId}')" title="Edit URL"
+      style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;color:#6b7280;line-height:1;">✏</button>` : ""}
+    ${c.url ? `<a href="${escHtml(normalizeUrl(c.url))}" target="_blank" rel="noopener" title="Open in new window"
+      style="font-size:15px;text-decoration:none;color:#16a34a;padding:2px 4px;line-height:1;">↗</a>
+      <span style="font-size:11px;color:#6b7280;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        title="${escHtml(c.url)}">${escHtml(urlShort)}</span>`
+      : `<span style="color:#d1d5db;font-size:12px;">—</span>`}
+  </div>`;
+
+  const notesLong = c.notes.length > 60;
+  const notesTxt  = (!c._expanded && notesLong) ? escHtml(c.notes.substring(0,60))+"…" : escHtml(c.notes);
+  const notesCell = c.notes
+    ? `<span>${notesTxt}</span>${notesLong
+        ? `<button onclick="_toggleContactNotes('${c.contactId}')"
+             style="background:none;border:none;cursor:pointer;font-size:11px;color:#16a34a;margin-left:4px;padding:0;white-space:nowrap;">
+             ${c._expanded ? "▲ less" : "▼ more"}</button>` : ""}`
+    : `<span style="color:#d1d5db;">—</span>`;
+
+  const actions = isManager
+    ? `<td style="${td}white-space:nowrap;">
+        <button onclick="openEditContactModal('${c.contactId}')"
+          style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #d1fae5;background:#f0fdf4;color:#166534;cursor:pointer;margin-right:4px;">Edit</button>
+        <button onclick="doDeleteContact('${c.contactId}',${c.rowIndex})"
+          style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fff1f2;color:#dc2626;cursor:pointer;">Del</button>
+      </td>` : "";
+
+  return `<tr style="background:${bg};" data-contact-id="${c.contactId}">
+    ${drag}
+    <td style="${td}font-weight:600;color:#1b4332;">${escHtml(c.vendor)}</td>
+    <td style="${td}">${escHtml(c.contactName)}</td>
+    <td style="${td}">${phone}</td>
+    <td style="${td}">${email}</td>
+    <td style="${td}">${urlCell}</td>
+    <td style="${td}max-width:200px;">${notesCell}</td>
+    ${actions}
+  </tr>`;
+}
+
+// Drag-and-drop reorder
+function _cDragStart(event, contactId) {
+  _cDragId = contactId;
+  event.dataTransfer.effectAllowed = "move";
+  event.stopPropagation();
+}
+function _cDrop(event, targetId) {
+  event.preventDefault();
+  event.currentTarget.closest("tr").style.outline = "";
+  if (!_cDragId || _cDragId === targetId) { _cDragId = null; return; }
+  const fi = _contacts.findIndex(c => c.contactId === _cDragId);
+  const ti = _contacts.findIndex(c => c.contactId === targetId);
+  if (fi === -1 || ti === -1) { _cDragId = null; return; }
+  const [moved] = _contacts.splice(fi, 1);
+  _contacts.splice(ti, 0, moved);
+  _saveContactSortOrder(_contacts.map(c => c.contactId));
+  _cDragId = null;
+  const tbody = document.getElementById("contacts-tbody");
+  if (tbody) {
+    const isManager = SESSION.role === "Manager";
+    tbody.innerHTML = _visibleContacts().map((c, i) => _contactRowHTML(c, i, isManager)).join("");
+  }
+}
+
+// Expandable notes
+function _toggleContactNotes(contactId) {
+  const c = _contacts.find(x => x.contactId === contactId);
+  if (!c) return;
+  c._expanded = !c._expanded;
+  const isManager = SESSION.role === "Manager";
+  const row = document.querySelector(`[data-contact-id="${contactId}"]`);
+  if (row) row.outerHTML = _contactRowHTML(c, _visibleContacts().findIndex(x => x.contactId === contactId), isManager);
+}
+
+// URL edit popup
+function openUrlEditPopup(contactId) {
+  const c = _contacts.find(x => x.contactId === contactId);
+  if (!c) return;
+  document.getElementById("_url-popup")?.remove();
+  const div = document.createElement("div");
+  div.id = "_url-popup";
+  div.innerHTML = `
+    <div style="position:fixed;inset:0;z-index:999;" onclick="document.getElementById('_url-popup').remove()"></div>
+    <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.18);padding:24px;z-index:1000;width:380px;max-width:95vw;">
+      <div style="font-weight:700;font-size:15px;color:#1b4332;margin-bottom:14px;">URL — ${escHtml(c.vendor)}</div>
+      <input id="_url-input" type="url" value="${escHtml(c.url)}" placeholder="https://…"
+        style="width:100%;padding:9px 12px;border:1.5px solid #d1fae5;border-radius:8px;font-size:14px;box-sizing:border-box;"/>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+        <button onclick="document.getElementById('_url-popup').remove()"
+          style="padding:7px 16px;border-radius:8px;border:1px solid #d1d5db;background:#f9fafb;cursor:pointer;font-size:13px;">Cancel</button>
+        <button onclick="_saveContactUrl('${contactId}')"
+          style="padding:7px 16px;border-radius:8px;border:none;background:#16a34a;color:#fff;font-weight:600;cursor:pointer;font-size:13px;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+  setTimeout(() => document.getElementById("_url-input")?.focus(), 50);
+}
+
+async function _saveContactUrl(contactId) {
+  const c = _contacts.find(x => x.contactId === contactId);
+  if (!c) return;
+  const newUrl = (document.getElementById("_url-input")?.value || "").trim();
+  document.getElementById("_url-popup")?.remove();
+  try {
+    await updateRow(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME, c.rowIndex,
+      [c.contactId, c.team, c.vendor, c.contactName, c.phone, c.email, newUrl, c.notes]);
+    c.url = newUrl;
+    _sDel(CONTACTS_CACHE_KEY);
+    const isManager = SESSION.role === "Manager";
+    const row = document.querySelector(`[data-contact-id="${contactId}"]`);
+    if (row) row.outerHTML = _contactRowHTML(c, _visibleContacts().findIndex(x => x.contactId === contactId), isManager);
+    showToast("URL updated ✓");
+  } catch(e) { alert("Failed to save URL: " + e.message); }
+}
+
+// Add/Edit modal
+function openAddContactModal()           { _openContactModal(null); }
+function openEditContactModal(contactId) { _openContactModal(contactId); }
+
+function _openContactModal(contactId) {
+  const c      = contactId ? _contacts.find(x => x.contactId === contactId) : null;
+  const isEdit = !!c;
+  const splitTeams = v => (v||"").split(",").map(t => t.trim()).filter(Boolean);
+  const allTeams   = [...new Set((window._configRows||[]).flatMap(r => splitTeams(r[6])))].sort();
+  const cTeams     = splitTeams(c?.team || "");
+  const hasAll     = cTeams.includes("All") || cTeams.length === 0;
+
+  const teamChecks = [
+    `<label style="display:flex;align-items:center;gap:6px;font-size:13px;">
+       <input type="checkbox" id="cmt-all" onchange="_cmTeamAllToggle()" ${hasAll?"checked":""}/>
+       All Teams
+     </label>`,
+    ...allTeams.map(t => `
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;">
+        <input type="checkbox" class="cmt-team" value="${escHtml(t)}" ${(!hasAll && cTeams.includes(t))?"checked":""}
+          ${hasAll?"disabled":""}/>
+        ${escHtml(t)}
+      </label>`)
+  ].join("");
+
+  const field = (id, label, type, val, ph="") =>
+    `<div style="margin-bottom:12px;">
+       <label style="font-size:12px;font-weight:600;color:#6b7280;display:block;margin-bottom:4px;">${label}</label>
+       <input id="${id}" type="${type}" value="${escHtml(val||"")}" placeholder="${ph}"
+         style="width:100%;padding:8px 12px;border:1.5px solid #d1fae5;border-radius:8px;font-size:13px;box-sizing:border-box;"/>
+     </div>`;
+
+  document.getElementById("_contact-modal")?.remove();
+  _contactModal = document.createElement("div");
+  _contactModal.id = "_contact-modal";
+  _contactModal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:998;" onclick="_closeContactModal()"></div>
+    <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:16px;
+         box-shadow:0 8px 40px rgba(0,0,0,0.22);padding:28px;z-index:999;width:460px;max-width:95vw;max-height:90vh;overflow-y:auto;">
+      <div style="font-size:17px;font-weight:700;color:#1b4332;margin-bottom:20px;">${isEdit ? "Edit Contact" : "Add Contact"}</div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:#6b7280;display:block;margin-bottom:6px;">Team Visibility</label>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px;border:1.5px solid #d1fae5;border-radius:8px;background:#f9fafb;">
+          ${teamChecks}
+        </div>
+      </div>
+
+      ${field("cm-vendor", "Vendor *",     "text",  c?.vendor,      "Acme Corp")}
+      ${field("cm-cname",  "Contact Name", "text",  c?.contactName, "John Doe")}
+      ${field("cm-phone",  "Phone",        "tel",   c?.phone,       "+1 800 555 0100")}
+      ${field("cm-email",  "Email",        "email", c?.email,       "support@vendor.com")}
+      ${field("cm-url",    "URL",          "url",   c?.url,         "https://")}
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:#6b7280;display:block;margin-bottom:4px;">Notes</label>
+        <textarea id="cm-notes" rows="3" placeholder="Optional notes…"
+          style="width:100%;padding:8px 12px;border:1.5px solid #d1fae5;border-radius:8px;font-size:13px;box-sizing:border-box;resize:vertical;">${escHtml(c?.notes||"")}</textarea>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button onclick="_closeContactModal()"
+          style="padding:8px 18px;border-radius:10px;border:1px solid #d1d5db;background:#f9fafb;cursor:pointer;font-size:13px;">Cancel</button>
+        <button onclick="doSaveContact(${isEdit ? `true,'${contactId}'` : "false,null"})"
+          style="padding:8px 18px;border-radius:10px;border:none;background:#16a34a;color:#fff;font-weight:600;cursor:pointer;font-size:13px;">
+          ${isEdit ? "Save Changes" : "Add Contact"}
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(_contactModal);
+}
+
+function _cmTeamAllToggle() {
+  const allCb = document.getElementById("cmt-all");
+  document.querySelectorAll(".cmt-team").forEach(cb => {
+    cb.disabled = allCb.checked;
+    if (allCb.checked) cb.checked = false;
+  });
+}
+
+function _closeContactModal() {
+  document.getElementById("_contact-modal")?.remove();
+  _contactModal = null;
+}
+
+async function doSaveContact(isEdit, contactId) {
+  const allChecked = document.getElementById("cmt-all")?.checked;
+  const teamVals   = allChecked
+    ? ["All"]
+    : [...document.querySelectorAll(".cmt-team:checked")].map(cb => cb.value);
+  const team   = teamVals.length ? teamVals.join(", ") : "All";
+  const vendor = (document.getElementById("cm-vendor")?.value || "").trim();
+  const cname  = (document.getElementById("cm-cname")?.value  || "").trim();
+  const phone  = (document.getElementById("cm-phone")?.value  || "").trim();
+  const email  = (document.getElementById("cm-email")?.value  || "").trim();
+  const url    = (document.getElementById("cm-url")?.value    || "").trim();
+  const notes  = (document.getElementById("cm-notes")?.value  || "").trim();
+
+  if (!vendor) { alert("Vendor name is required."); return; }
+  _closeContactModal();
+
+  try {
+    if (isEdit) {
+      const c = _contacts.find(x => x.contactId === contactId);
+      await updateRow(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME, c.rowIndex,
+        [c.contactId, team, vendor, cname, phone, email, url, notes]);
+    } else {
+      const newId = nextContactId(_contacts);
+      await appendRow(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME, [newId, team, vendor, cname, phone, email, url, notes]);
+    }
+    _sDel(CONTACTS_CACHE_KEY); _contactsLoaded = false;
+    await loadContacts();
+    showToast(isEdit ? "Contact updated ✓" : "Contact added ✓");
+  } catch(e) { alert("Save failed: " + e.message); }
+}
+
+async function doDeleteContact(contactId, rowIndex) {
+  if (!confirm("Delete this contact?")) return;
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, CONTACTS_SHEET_NAME, rowIndex);
+    _contacts = _contacts.filter(c => c.contactId !== contactId);
+    renderContactsView();
+    _sDel(CONTACTS_CACHE_KEY); _contactsLoaded = false;
+    loadContacts();
+    showToast("Contact deleted ✓");
+  } catch(e) { alert("Delete failed: " + e.message); }
 }
 
 // ── TEAM EVENTS CALENDAR ───────────────────────────────────────────────────────
