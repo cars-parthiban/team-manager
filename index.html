@@ -379,6 +379,7 @@ async function doLogin() {
     const user = await proxyCall({ action: "validatePin", sheetId: CALENDAR_SHEET_ID, name, pin });
     if (!user || !user.valid) {
       const lockResult = await incrementFailedAttempts(name);
+      logLoginFailure(name); // fire-and-forget — don't await, don't block UI
       if (btnEl) { btnEl.disabled = false; btnEl.style.opacity = "1"; btnEl.textContent = "Sign In"; }
       if (lockResult.locked) {
         errEl.innerHTML = errorBox("Account locked after 3 failed attempts. Please contact your manager.");
@@ -1951,17 +1952,30 @@ async function doRemoveUser(name) {
 }
 
 // ── ACTIVITY LOG ───────────────────────────────────────────────────────────────
+async function _fetchIP() {
+  try {
+    const r = await fetch("https://api.ipify.org?format=json");
+    return (await r.json()).ip || "Unknown";
+  } catch { return "Unknown"; }
+}
+
 async function logLoginActivity() {
   try {
     const now = new Date();
     const ts  = `${now.toLocaleDateString("en-US")} ${now.toLocaleTimeString("en-US", {hour:"2-digit",minute:"2-digit",second:"2-digit"})}`;
-    let ip = "";
-    try {
-      const r = await fetch("https://api.ipify.org?format=json");
-      ip = (await r.json()).ip || "";
-    } catch { ip = "Unknown"; }
-    await appendRow(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, [ts, SESSION.name, SESSION.role, ip]);
+    const ip  = await _fetchIP();
+    await appendRow(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, [ts, SESSION.name, SESSION.role, ip, "Success"]);
   } catch { /* silent — don't block login flow */ }
+}
+
+async function logLoginFailure(name) {
+  try {
+    const now  = new Date();
+    const ts   = `${now.toLocaleDateString("en-US")} ${now.toLocaleTimeString("en-US", {hour:"2-digit",minute:"2-digit",second:"2-digit"})}`;
+    const ip   = await _fetchIP();
+    const role = (window._configRows || []).find(r => r[1] === name)?.[2] || "";
+    await appendRow(CALENDAR_SHEET_ID, LOGIN_LOG_SHEET_NAME, [ts, name, role, ip, "Failure"]);
+  } catch { /* silent */ }
 }
 
 function renderActivity() {
@@ -2012,6 +2026,14 @@ async function _bgRefreshActivity() {
     _sSet(ACT_CACHE_KEY, logRows);
     if (JSON.stringify(logRows) !== JSON.stringify(prev)) renderActivityTable(logRows);
   } catch {}
+}
+
+async function refreshLoginHistory() {
+  const btn = document.getElementById("act-refresh-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "↻ Loading…"; }
+  _sDel(ACT_CACHE_KEY);
+  _actLoaded = false;
+  await loadActivityLog();
 }
 
 async function unlockAccount(name) {
@@ -2075,22 +2097,35 @@ function renderActivityTable(logRows) {
     <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #d1fae5;">
         <span style="font-size:14px;font-weight:700;color:#1b4332;">Login History</span>
-        <span style="font-size:12px;color:#9ca3af;">${dataRows.length} record${dataRows.length!==1?"s":""}</span>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span style="font-size:12px;color:#9ca3af;">${dataRows.length} record${dataRows.length!==1?"s":""}</span>
+          <button id="act-refresh-btn" onclick="refreshLoginHistory()"
+            style="font-size:12px;font-weight:600;padding:5px 12px;border-radius:8px;border:1.5px solid #d1fae5;background:#f0fdf4;color:#1b4332;cursor:pointer;">
+            ↻ Refresh
+          </button>
+        </div>
       </div>
       ${dataRows.length === 0
         ? `<div style="padding:3rem;text-align:center;color:#9ca3af;">No login activity recorded yet.</div>`
         : `<div style="overflow-x:auto;">
             <table style="width:100%;font-size:13px;">
               <thead><tr style="background:#f0fdf4;">
-                ${["Timestamp","Name","Role","IP Address"].map(h=>`<th style="padding:10px 14px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;text-align:left;">${h}</th>`).join("")}
+                ${["Timestamp","Name","Role","Status","IP Address"].map(h=>`<th style="padding:10px 14px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;text-align:left;">${h}</th>`).join("")}
               </tr></thead>
-              <tbody>${dataRows.map((r,i) => `
-                <tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f0fdf4;">
+              <tbody>${dataRows.map((r,i) => {
+                const isFail = (r[4]||"").toLowerCase() === "failure";
+                const rowBg  = isFail ? "#fff5f5" : (i%2===0?"#fff":"#fafafa");
+                const statusBadge = isFail
+                  ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;">Failed</span>`
+                  : `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#dcfce7;color:#16a34a;border:1px solid #86efac;">Success</span>`;
+                return `<tr style="background:${rowBg};border-bottom:1px solid #f0fdf4;">
                   <td style="padding:9px 14px;white-space:nowrap;color:#374151;font-size:12px;">${formatTimestamp(r[0])}</td>
-                  <td style="padding:9px 14px;font-weight:600;color:#1b4332;">${r[1]||""}</td>
-                  <td style="padding:9px 14px;">${roleBadge(r[2]||"")}</td>
+                  <td style="padding:9px 14px;font-weight:600;color:${isFail?"#dc2626":"#1b4332"};">${r[1]||""}</td>
+                  <td style="padding:9px 14px;">${r[2] ? roleBadge(r[2]) : '<span style="color:#d1d5db;">—</span>'}</td>
+                  <td style="padding:9px 14px;">${statusBadge}</td>
                   <td style="padding:9px 14px;color:#6b7280;font-family:monospace;font-size:11px;">${r[3]||""}</td>
-                </tr>`).join("")}
+                </tr>`;
+              }).join("")}
               </tbody>
             </table>
           </div>`}
@@ -2807,8 +2842,14 @@ function returnToManager() {
 }
 
 // ── CONTACTS ───────────────────────────────────────────────────────────────────
-let _contacts     = [];
-let _contactModal = null;
+let _contacts           = [];
+let _contactModal       = null;
+let _contactsFilterTeam = "All";
+
+function setContactsFilter(team) {
+  _contactsFilterTeam = team;
+  renderContactsView();
+}
 let _cDragId      = null;
 
 function rowsToContacts(rows) {
@@ -2896,11 +2937,38 @@ function renderContactsView() {
   const el = document.getElementById("contacts-main");
   if (!el) return;
   const isManager = SESSION.role === "Manager";
-  const list = _visibleContacts();
+  const allVisible = _visibleContacts();
+
+  // unique teams across all accessible contacts
+  const teamSet = [...new Set(allVisible.flatMap(c =>
+    (c.team || "All").split(",").map(t => t.trim()).filter(t => t && t !== "All")
+  ))].sort();
+  const showChips = teamSet.length > 1;
+
+  // apply active team filter
+  const list = (showChips && _contactsFilterTeam !== "All")
+    ? allVisible.filter(c => {
+        const ct = (c.team || "All").split(",").map(t => t.trim());
+        return ct.includes(_contactsFilterTeam) || ct.includes("All");
+      })
+    : allVisible;
 
   const addBtn = isManager
     ? `<button onclick="openAddContactModal()" style="background:#16a34a;color:#fff;font-size:13px;font-weight:600;padding:8px 18px;border-radius:10px;border:none;cursor:pointer;">+ Add Contact</button>`
     : "";
+
+  const filterChips = showChips ? `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      ${[{t:"All",label:"All"}, ...teamSet.map(t=>({t,label:t}))].map(({t,label}) => {
+        const active = _contactsFilterTeam === t;
+        const tc = t === "All" ? {bg:"#1b4332",color:"#fff",border:"#1b4332"} : teamColor(t);
+        const bg = active ? tc.bg : "#f9fafb";
+        const fg = active ? tc.color : "#374151";
+        const brd = active ? tc.border : "#e5e7eb";
+        return `<button onclick="setContactsFilter('${t}')"
+          style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;border:1.5px solid ${brd};background:${bg};color:${fg};cursor:pointer;">${label}</button>`;
+      }).join("")}
+    </div>` : "";
 
   const thS = "padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;white-space:nowrap;";
   const tableHTML = list.length === 0
@@ -2924,13 +2992,14 @@ function renderContactsView() {
 
   el.innerHTML = `
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;padding:20px;margin:16px 0;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${showChips?"10":"16"}px;">
         <div>
           <span style="font-size:16px;font-weight:700;color:#1b4332;">Vendor Contacts</span>
           <span style="margin-left:10px;font-size:12px;color:#9ca3af;">${list.length} contact${list.length!==1?"s":""}</span>
         </div>
         ${addBtn}
       </div>
+      ${filterChips}
       ${tableHTML}
     </div>`;
 }
