@@ -4577,6 +4577,28 @@ async function doUnarchiveTask(rowIndex) {
   }
 }
 
+async function doDeleteArchivedTask(rowIndex) {
+  const task = _archiveTasks.find(t => t.rowIndex === rowIndex);
+  if (!task) return;
+  if (!confirm(`Permanently delete "${task.task}"?\n\nThis cannot be undone.`)) return;
+
+  const prevArchiveTasks = _archiveTasks.slice();
+  const shiftIndex = t => t.rowIndex > rowIndex ? { ...t, rowIndex: t.rowIndex - 1 } : t;
+  _archiveTasks = _archiveTasks.filter(t => t.rowIndex !== rowIndex).map(shiftIndex);
+  renderArchiveTable();
+  showToast("Deleted ✓");
+
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME, rowIndex);
+    _sDel(ARCHIVE_CACHE_KEY);
+    _archiveLoaded = false;
+  } catch(e) {
+    _archiveTasks = prevArchiveTasks;
+    renderArchiveTable();
+    alert("Delete failed: " + e.message);
+  }
+}
+
 function renderArchive() {
   document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
     tabBarHTML() + `<div id="archive-main"></div>`);
@@ -4712,6 +4734,7 @@ function renderArchiveTable() {
           <td style="padding:10px 12px;white-space:nowrap;font-size:11px;color:#6b7280;">${formatDueDate(t.archivedDate)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
             <button onclick="doUnarchiveTask(${t.rowIndex})" style="background:#dbeafe;color:#1e40af;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;cursor:pointer;">Unarchive</button>
+            <button onclick="doDeleteArchivedTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;border:none;cursor:pointer;margin-left:6px;">Del</button>
           </td>
         </tr>`;
       }).join("");
