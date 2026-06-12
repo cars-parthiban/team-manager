@@ -2178,6 +2178,9 @@ let _linkModal   = null;
 const LINKS_CACHE_KEY = "tmgr_links";
 let _linksLoaded = false;
 let _linksFilterTeam = "All";
+let _linksSearch    = "";
+let _linksDragging  = null;
+const LINKS_ORDER_KEY = "tmgr_links_order";
 
 function rowsToLinks(rows) {
   if (rows.length < 2) return [];
@@ -2238,8 +2241,56 @@ async function _bgRefreshLinks() {
   } catch {}
 }
 
+function _getLinksOrder() {
+  try { return JSON.parse(localStorage.getItem(LINKS_ORDER_KEY) || "[]"); } catch { return []; }
+}
+
 function setLinksFilter(team) {
   _linksFilterTeam = team;
+  _linksSearch = "";
+  renderLinksView();
+}
+
+function linksSearch(q) {
+  _linksSearch = q.toLowerCase();
+  renderLinksView();
+  // restore cursor after innerHTML re-render
+  const inp = document.getElementById("links-search-input");
+  if (inp && document.activeElement !== inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+}
+
+function onLinkDragStart(e, id) {
+  _linksDragging = id;
+  e.dataTransfer.effectAllowed = "move";
+  e.currentTarget.style.opacity = "0.4";
+}
+function onLinkDragEnd(e) {
+  e.currentTarget.style.opacity = "";
+  document.querySelectorAll("tr[data-lid]").forEach(r => r.style.borderTop = "");
+}
+function onLinkDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  document.querySelectorAll("tr[data-lid]").forEach(r => r.style.borderTop = "");
+  e.currentTarget.style.borderTop = "2px solid #1b4332";
+}
+function onLinkDrop(e, targetId) {
+  e.preventDefault();
+  document.querySelectorAll("tr[data-lid]").forEach(r => r.style.borderTop = "");
+  if (!_linksDragging || _linksDragging === targetId) { _linksDragging = null; return; }
+  const isManager = SESSION.role === "Manager";
+  const myTeams = SESSION.teams || [];
+  const accessible = isManager
+    ? [..._allLinks]
+    : _allLinks.filter(l => l.team === "All" || myTeams.includes(l.team));
+  const prev = _getLinksOrder();
+  const ordered   = prev.filter(id => accessible.some(l => l.linkId === id));
+  const unordered = accessible.filter(l => !prev.includes(l.linkId)).map(l => l.linkId);
+  const full = [...ordered, ...unordered];
+  const fi = full.indexOf(_linksDragging), ti = full.indexOf(targetId);
+  if (fi !== -1 && ti !== -1) { full.splice(fi, 1); full.splice(ti, 0, _linksDragging); }
+  localStorage.setItem(LINKS_ORDER_KEY, JSON.stringify(full));
+  _linksDragging = null;
   renderLinksView();
 }
 
@@ -2249,28 +2300,58 @@ function renderLinksView() {
   const isManager = SESSION.role === "Manager";
   const myTeams   = SESSION.teams || [];
 
-  // all links accessible to this user
-  const accessible = isManager
-    ? [..._allLinks].sort((a,b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title))
-    : _allLinks.filter(l => l.team === "All" || myTeams.includes(l.team))
-               .sort((a,b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title));
+  // all links accessible to this user, applying custom order or alphabetical fallback
+  let accessible = isManager
+    ? [..._allLinks]
+    : _allLinks.filter(l => l.team === "All" || myTeams.includes(l.team));
+
+  const savedOrder = _getLinksOrder();
+  if (savedOrder.length) {
+    accessible.sort((a, b) => {
+      const ai = savedOrder.indexOf(a.linkId), bi = savedOrder.indexOf(b.linkId);
+      if (ai === -1 && bi === -1) return a.team.localeCompare(b.team) || a.title.localeCompare(b.title);
+      if (ai === -1) return 1; if (bi === -1) return -1;
+      return ai - bi;
+    });
+  } else {
+    accessible.sort((a,b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title));
+  }
 
   // unique teams present in accessible links (excluding "All" from chip list)
   const teamSet = [...new Set(accessible.map(l => l.team).filter(t => t !== "All"))].sort();
   const showChips = teamSet.length > 1;
 
-  // apply active filter
-  const visible = (_linksFilterTeam !== "All" && showChips)
+  // apply team filter
+  const teamFiltered = (_linksFilterTeam !== "All" && showChips)
     ? accessible.filter(l => l.team === _linksFilterTeam || l.team === "All")
     : accessible;
 
+  // apply search filter
+  const q = _linksSearch.trim().toLowerCase();
+  const visible = q
+    ? teamFiltered.filter(l =>
+        l.title.toLowerCase().includes(q) ||
+        (l.desc && l.desc.toLowerCase().includes(q)) ||
+        l.team.toLowerCase().includes(q))
+    : teamFiltered;
+
+  // drag only active when not searching (search is a temporary view)
+  const canDrag = isManager && !q;
+
   const addBtn = isManager
-    ? `<button onclick="openLinkModal('add')" style="padding:8px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Link</button>`
+    ? `<button onclick="openLinkModal('add')" style="padding:8px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;white-space:nowrap;">+ Add Link</button>`
     : "";
 
-  // filter chips (only shown when multiple teams exist)
+  const searchBox = `<div style="position:relative;flex:1;max-width:280px;">
+    <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:13px;color:#9ca3af;pointer-events:none;">&#128269;</span>
+    <input id="links-search-input" type="text" value="${_linksSearch.replace(/"/g,'&quot;')}"
+      oninput="linksSearch(this.value)"
+      placeholder="Search links…"
+      style="width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border-radius:20px;border:1.5px solid #d1fae5;font-size:12px;outline:none;"/>
+  </div>`;
+
   const filterChips = showChips ? `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
       ${[{t:"All",label:"All"}, ...teamSet.map(t=>({t,label:t}))].map(({t,label}) => {
         const active = _linksFilterTeam === t;
         const tc = t === "All" ? {bg:"#1b4332",color:"#fff",border:"#1b4332"} : teamColor(t);
@@ -2282,23 +2363,35 @@ function renderLinksView() {
       }).join("")}
     </div>` : "";
 
-  const topRow = (addBtn || showChips)
-    ? `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;">
-        <div style="flex:1;">${filterChips}</div>
-        ${addBtn}
-      </div>`
-    : "";
+  const topBar = `${filterChips}
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      ${searchBox}
+      <div style="flex:1;"></div>
+      ${addBtn}
+    </div>`;
 
   if (!accessible.length) {
-    el.innerHTML = topRow + `<div style="text-align:center;padding:3rem;color:#9ca3af;">No links yet${isManager?"":" for your team"}.</div>`;
+    el.innerHTML = topBar + `<div style="text-align:center;padding:3rem;color:#9ca3af;">No links yet${isManager?"":" for your team"}.</div>`;
     return;
   }
+
+  const dragHandleTh = canDrag ? `<th style="width:24px;padding:8px 4px;border-bottom:2px solid #d1fae5;"></th>` : "";
 
   const rows = visible.map((l, i) => {
     const tc = teamColor(l.team);
     const teamCell = `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};white-space:nowrap;">${l.team}</span>`;
     const rowBg = i % 2 === 0 ? "#fff" : "#fafafa";
-    return `<tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+    const dragAttrs = canDrag
+      ? `draggable="true" data-lid="${l.linkId}"
+         ondragstart="onLinkDragStart(event,'${l.linkId}')"
+         ondragend="onLinkDragEnd(event)"
+         ondragover="onLinkDragOver(event)"
+         ondrop="onLinkDrop(event,'${l.linkId}')"` : "";
+    const dragCell = canDrag
+      ? `<td style="padding:8px 4px;text-align:center;cursor:grab;color:#c4c9d0;user-select:none;font-size:14px;" title="Drag to reorder">⠿</td>`
+      : "";
+    return `<tr ${dragAttrs} style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+      ${dragCell}
       <td style="padding:8px 10px;white-space:nowrap;">${teamCell}</td>
       <td style="padding:8px 12px;">
         <div style="font-size:13px;font-weight:600;color:#1b4332;">${l.title}</div>
@@ -2317,7 +2410,7 @@ function renderLinksView() {
     </tr>`;
   }).join("");
 
-  el.innerHTML = topRow + `
+  el.innerHTML = topBar + `
     <div style="background:#fff;border-radius:14px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;background:#f9fafb;">
         <span style="font-size:13px;font-weight:700;color:#1b4332;">Links</span>
@@ -2327,6 +2420,7 @@ function renderLinksView() {
         <table style="width:100%;font-size:13px;border-collapse:collapse;">
           <thead>
             <tr style="background:#f0fdf4;">
+              ${dragHandleTh}
               <th style="padding:8px 10px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;white-space:nowrap;">Team</th>
               <th style="padding:8px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;text-align:left;">Title / Description</th>
               <th style="padding:8px 10px;border-bottom:2px solid #d1fae5;"></th>
@@ -2337,6 +2431,11 @@ function renderLinksView() {
         </table>
       </div>
     </div>`;
+
+  if (q) {
+    const inp = document.getElementById("links-search-input");
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }
 }
 
 function openLinkModal(mode, rowIndex) {
