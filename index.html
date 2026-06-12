@@ -2958,7 +2958,7 @@ function renderContactsView() {
     : "";
 
   const filterChips = showChips ? `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       ${[{t:"All",label:"All"}, ...teamSet.map(t=>({t,label:t}))].map(({t,label}) => {
         const active = _contactsFilterTeam === t;
         const tc = t === "All" ? {bg:"#1b4332",color:"#fff",border:"#1b4332"} : teamColor(t);
@@ -2992,14 +2992,16 @@ function renderContactsView() {
 
   el.innerHTML = `
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;padding:20px;margin:16px 0;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${showChips?"10":"16"}px;">
-        <div>
-          <span style="font-size:16px;font-weight:700;color:#1b4332;">Vendor Contacts</span>
-          <span style="margin-left:10px;font-size:12px;color:#9ca3af;">${list.length} contact${list.length!==1?"s":""}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div>
+            <span style="font-size:16px;font-weight:700;color:#1b4332;">Vendor Contacts</span>
+            <span style="margin-left:10px;font-size:12px;color:#9ca3af;">${list.length} contact${list.length!==1?"s":""}</span>
+          </div>
+          ${filterChips}
         </div>
         ${addBtn}
       </div>
-      ${filterChips}
       ${tableHTML}
     </div>`;
 }
