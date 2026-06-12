@@ -4582,6 +4582,7 @@ async function doDeleteArchivedTask(rowIndex) {
   if (!task) return;
   if (!confirm(`Permanently delete "${task.task}"?\n\nThis cannot be undone.`)) return;
 
+  _taskOpInProgress = true;
   const prevArchiveTasks = _archiveTasks.slice();
   const shiftIndex = t => t.rowIndex > rowIndex ? { ...t, rowIndex: t.rowIndex - 1 } : t;
   _archiveTasks = _archiveTasks.filter(t => t.rowIndex !== rowIndex).map(shiftIndex);
@@ -4596,6 +4597,8 @@ async function doDeleteArchivedTask(rowIndex) {
     _archiveTasks = prevArchiveTasks;
     renderArchiveTable();
     alert("Delete failed: " + e.message);
+  } finally {
+    _taskOpInProgress = false;
   }
 }
 
