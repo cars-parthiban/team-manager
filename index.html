@@ -2943,7 +2943,7 @@ function renderContactsView() {
   const teamSet = [...new Set(allVisible.flatMap(c =>
     (c.team || "All").split(",").map(t => t.trim()).filter(t => t && t !== "All")
   ))].sort();
-  const showChips = teamSet.length > 1;
+  const showChips = teamSet.length >= 1;
 
   // apply active team filter
   const list = (showChips && _contactsFilterTeam !== "All")
