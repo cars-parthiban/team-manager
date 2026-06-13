@@ -1415,7 +1415,7 @@ function renderCalendar() {
   const role = SESSION.role;
   document.getElementById("app").innerHTML = shellHTML(role, SESSION.name, tabBarHTML() + `<div id="cal-main"></div>`);
   if (_calLoaded) {
-    _calView === "year" ? renderYearView() : renderCalendarGrid();
+    _renderCalView();
     _bgRefreshCal();
   } else {
     document.getElementById("cal-main").innerHTML = `<div class="spinner"></div>`;
@@ -1428,7 +1428,7 @@ async function loadCalendarEvents() {
   if (cached) {
     _calEvents = cached;
     _calLoaded = true;
-    _calView === "year" ? renderYearView() : renderCalendarGrid();
+    _renderCalView();
   }
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, CALENDAR_SHEET_NAME);
@@ -1436,7 +1436,7 @@ async function loadCalendarEvents() {
     _sSet(CAL_CACHE_KEY, fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_calEvents)) {
       _calEvents = fresh;
-      _calView === "year" ? renderYearView() : renderCalendarGrid();
+      _renderCalView();
     }
     _calLoaded = true;
   } catch(e) {
@@ -1452,7 +1452,7 @@ async function reloadCalendarEvents() {
   _calEvents  = rowsToEvents(rows);
   _sSet(CAL_CACHE_KEY, _calEvents);
   _calLoaded  = true;
-  _calView === "year" ? renderYearView() : renderCalendarGrid();
+  _renderCalView();
 }
 
 async function _bgRefreshCal() {
@@ -1462,9 +1462,15 @@ async function _bgRefreshCal() {
     _sSet(CAL_CACHE_KEY, fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_calEvents)) {
       _calEvents = fresh;
-      _calView === "year" ? renderYearView() : renderCalendarGrid();
+      _renderCalView();
     }
   } catch {}
+}
+
+function _renderCalView() {
+  if (_calView === "year") renderYearView();
+  else if (_calView === "list") renderListView();
+  else renderCalendarGrid();
 }
 
 function renderCalendarGrid() {
@@ -1555,12 +1561,12 @@ function calNextMonth() {
   if (_calMonth === 11) { _calMonth = 0; _calYear++; } else _calMonth++;
   renderCalendarGrid();
 }
-function calPrevYear() { _calYear--; renderYearView(); }
-function calNextYear() { _calYear++; renderYearView(); }
+function calPrevYear() { _calYear--; _calView === "list" ? renderListView() : renderYearView(); }
+function calNextYear() { _calYear++; _calView === "list" ? renderListView() : renderYearView(); }
 
 function setCalView(view) {
   _calView = view;
-  view === "year" ? renderYearView() : renderCalendarGrid();
+  _renderCalView();
 }
 
 function switchToMonth(monthIndex) {
@@ -1569,10 +1575,108 @@ function switchToMonth(monthIndex) {
 }
 
 function calViewToggleHTML() {
+  const btn = (v, label) => {
+    const active = _calView === v;
+    return `<button onclick="setCalView('${v}')" style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${active?'#1b4332':'transparent'};color:${active?'#fff':'#6b7280'};">${label}</button>`;
+  };
   return `<div style="display:flex;background:#f0fdf4;border-radius:7px;padding:2px;border:1px solid #d1fae5;">
-    <button onclick="setCalView('month')" style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${_calView==='month'?'#1b4332':'transparent'};color:${_calView==='month'?'#fff':'#6b7280'};">Month</button>
-    <button onclick="setCalView('year')"  style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${_calView==='year'?'#1b4332':'transparent'};color:${_calView==='year'?'#fff':'#6b7280'};">Year</button>
+    ${btn('month','Month')}${btn('year','Year')}${btn('list','List')}
   </div>`;
+}
+
+function renderListView() {
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const year   = _calYear;
+  const yStart = `${year}-01-01`, yEnd = `${year}-12-31`;
+  const yEvts  = _calEvents.filter(e => e.endDate >= yStart && e.startDate <= yEnd);
+
+  const allNames = yEvts.length
+    ? [...new Set(yEvts.map(e => e.memberName))].filter(Boolean).sort()
+    : (SESSION.role === "Manager" ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])] : [SESSION.name]);
+  assignMemberColors(allNames);
+
+  const isManager = SESSION.role === "Manager";
+  const colSpan   = isManager ? 4 : 3;
+
+  const calcDays = (start, end) => {
+    const ms = new Date(end+"T00:00:00") - new Date(start+"T00:00:00");
+    return Math.round(ms / 86400000) + 1;
+  };
+
+  // group by member (sorted), within each member sort by start date
+  const groups = allNames.map(name => ({
+    name,
+    color: memberColor(name),
+    events: yEvts.filter(e => e.memberName === name)
+                 .sort((a, b) => a.startDate.localeCompare(b.startDate))
+  })).filter(g => g.events.length > 0);
+
+  const totalCount = groups.reduce((n, g) => n + g.events.length, 0);
+
+  const bodyRows = groups.map(g => {
+    const memberHeader = `
+      <tr>
+        <td colspan="${colSpan}" style="padding:8px 14px;background:#f0fdf4;border-top:2px solid #d1fae5;border-bottom:1px solid #d1fae5;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:10px;height:10px;border-radius:50%;background:${g.color};flex-shrink:0;"></div>
+            <span style="font-size:13px;font-weight:700;color:#1b4332;">${g.name}</span>
+            <span style="font-size:11px;color:#9ca3af;">${g.events.length} absence${g.events.length!==1?"s":""}</span>
+          </div>
+        </td>
+      </tr>`;
+    const evtRows = g.events.map((e, i) => {
+      const days = calcDays(e.startDate, e.endDate);
+      const rowBg = i % 2 === 0 ? "#fff" : "#fafafa";
+      return `<tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+        <td style="padding:9px 14px 9px 28px;white-space:nowrap;font-size:12px;color:#374151;">
+          ${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)}
+        </td>
+        <td style="padding:9px 14px;font-size:12px;color:#6b7280;text-align:center;white-space:nowrap;">
+          ${days} day${days!==1?"s":""}
+        </td>
+        <td style="padding:9px 14px;font-size:12px;color:#9ca3af;">${e.notes || "—"}</td>
+        ${isManager ? `<td style="padding:9px 10px;white-space:nowrap;">
+          <button onclick="openCalEditModal(${e.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:none;cursor:pointer;">Edit</button>
+        </td>` : ""}
+      </tr>`;
+    }).join("");
+    return memberHeader + evtRows;
+  }).join("");
+
+  const el = document.getElementById("cal-main");
+  if (!el) return;
+  el.innerHTML = `
+    <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
+        <button onclick="calPrevYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;flex-shrink:0;">&#8249;</button>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;flex:1;">
+          <span style="font-size:15px;font-weight:700;color:#1b4332;">${year} — Absence List</span>
+          ${calViewToggleHTML()}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <button onclick="openCalAddModal(null)" style="background:#1b4332;color:#fff;font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;border:none;cursor:pointer;">+ Add</button>
+          <button onclick="calNextYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;">&#8250;</button>
+        </div>
+      </div>
+      ${groups.length === 0
+        ? `<div style="padding:3rem;text-align:center;color:#9ca3af;">No absences recorded for ${year}.</div>`
+        : `<div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="background:#f9fafb;">
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:left;white-space:nowrap;border-bottom:2px solid #d1fae5;">Date Range</th>
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:center;white-space:nowrap;border-bottom:2px solid #d1fae5;">Days</th>
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:left;border-bottom:2px solid #d1fae5;">Notes</th>
+                  ${isManager ? `<th style="padding:9px 10px;border-bottom:2px solid #d1fae5;"></th>` : ""}
+                </tr>
+              </thead>
+              <tbody>${bodyRows}</tbody>
+            </table>
+            <div style="padding:10px 14px;border-top:1px solid #f3f4f6;font-size:12px;color:#9ca3af;text-align:right;">
+              ${totalCount} total absence${totalCount!==1?"s":""} across ${groups.length} member${groups.length!==1?"s":""}
+            </div>
+          </div>`}
+    </div>`;
 }
 
 function renderYearView() {
