@@ -1578,9 +1578,9 @@ function renderCalendarGrid() {
     rowsHTML.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #f3f4f6;">${rowCells}</div>`);
   }
 
-  const allNames = _calEvents.length
-    ? [...new Set(_calEvents.map(e => e.memberName))].filter(Boolean)
-    : (SESSION.role === "Manager" ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])] : [SESSION.name]);
+  const allNames = monthEvts.length
+    ? [...new Set(monthEvts.map(e => e.memberName))].filter(Boolean)
+    : (SESSION.role === "Manager" && SESSION.memberRows ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])] : [SESSION.name]);
   assignMemberColors(allNames);
   const legendItems = allNames.map(n =>
     `<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6b7280;white-space:nowrap;">
