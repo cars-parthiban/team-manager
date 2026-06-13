@@ -4371,13 +4371,17 @@ function _tEventsCalViewToggle() {
 function renderTEventsListView() {
   const year    = _teamCalYear;
   const yStart  = `${year}-01-01`, yEnd = `${year}-12-31`;
-  const showAll = _activeTeamCal === "all";
+  const showAll     = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const memberTeamsL = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const yEvts   = _teamEvents.filter(e =>
-    (showAll || e.team === _activeTeamCal) && e.endDate >= yStart && e.startDate <= yEnd
+    (showAll || e.team === _activeTeamCal) && (!memberTeamsL || memberTeamsL.has(e.team)) &&
+    e.endDate >= yStart && e.startDate <= yEnd
   );
 
   const isManager  = SESSION.role === "Manager";
-  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+  const availTeams = isManager
+    ? (getTeamNames().length ? getTeamNames() : (SESSION.teams||[]))
+    : (SESSION.teams||[]);
   const colSpan    = isManager ? 5 : 4;
 
   const calcDays = (s, e) => Math.round((new Date(e+"T00:00:00") - new Date(s+"T00:00:00")) / 86400000) + 1;
@@ -4468,8 +4472,9 @@ function renderTEventsGrid() {
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
   const mStart   = `${year}-${String(month+1).padStart(2,"0")}-01`;
   const mEnd     = `${year}-${String(month+1).padStart(2,"0")}-${String(dim).padStart(2,"0")}`;
-  const showAll  = _activeTeamCal === "all";
-  const mEvts    = _teamEvents.filter(e => (showAll || e.team === _activeTeamCal) && e.endDate >= mStart && e.startDate <= mEnd);
+  const showAll    = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const memberTeams = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
+  const mEvts    = _teamEvents.filter(e => (showAll || e.team === _activeTeamCal) && (!memberTeams || memberTeams.has(e.team)) && e.endDate >= mStart && e.startDate <= mEnd);
 
   const cells = Array(firstDay).fill(null);
   for (let d=1; d<=dim; d++) cells.push(d);
@@ -4508,7 +4513,9 @@ function renderTEventsGrid() {
   const legend = legendItems.length ? `
     <div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 14px;border-top:1px solid #f3f4f6;">${legendItems.join("")}</div>` : "";
 
-  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+  const availTeams = SESSION.role === "Manager"
+    ? (getTeamNames().length ? getTeamNames() : (SESSION.teams||[]))
+    : (SESSION.teams||[]);
   const el = document.getElementById("events-main");
   if (!el) return;
   el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
@@ -4537,8 +4544,9 @@ function renderTEventsYearView() {
   const year = _teamCalYear;
   const td = new Date();
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
-  const showAllY = _activeTeamCal === "all";
-  const yEvts = _teamEvents.filter(e => (showAllY || e.team===_activeTeamCal) && e.endDate>=`${year}-01-01` && e.startDate<=`${year}-12-31`);
+  const showAllY    = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const memberTeamsY = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
+  const yEvts = _teamEvents.filter(e => (showAllY || e.team===_activeTeamCal) && (!memberTeamsY || memberTeamsY.has(e.team)) && e.endDate>=`${year}-01-01` && e.startDate<=`${year}-12-31`);
 
   const miniMonths = MONTHS.map((mName,mi) => {
     const mn  = mi+1;
@@ -4584,7 +4592,9 @@ function renderTEventsYearView() {
     </div>`;
   });
 
-  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+  const availTeams = SESSION.role === "Manager"
+    ? (getTeamNames().length ? getTeamNames() : (SESSION.teams||[]))
+    : (SESSION.teams||[]);
   const el = document.getElementById("events-main");
   if (!el) return;
   el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
@@ -4620,7 +4630,9 @@ function renderTeamEventModal() {
   const m  = _teamEventModal; if (!m) return;
   const isEdit = m.mode==="edit";
   const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;";
-  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+  const availTeams = SESSION.role === "Manager"
+    ? (getTeamNames().length ? getTeamNames() : (SESSION.teams||[]))
+    : (SESSION.teams||[]);
   const teamOpts = availTeams.map(t=>`<option value="${t}"${t===m.team?" selected":""}>${t}</option>`).join("");
   const canPickTeam = availTeams.length > 1;
 
