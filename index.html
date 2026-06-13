@@ -399,6 +399,11 @@ async function doLogin() {
       SESSION = { name: user.name, role: user.role, teams: parseTeams(user.team) };
     }
     resetAccountStatus(name);
+    // Seed member colors from the full roster so all tabs use consistent unique colors
+    const allMemberNames = SESSION.role === "Manager"
+      ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])]
+      : [SESSION.name];
+    assignMemberColors(allMemberNames);
     render();
     prefetchAllTabs();
     logLoginActivity();
@@ -487,7 +492,7 @@ function shellHTML(roleLabel, userName, mainContent) {
     </div>`;
 }
 
-function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; render(); }
+function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; _memberColorMap = {}; render(); }
 
 function prefetchAllTabs() {
   // Fire all tab data fetches in parallel right after login
@@ -1378,11 +1383,32 @@ function teamColor(t) {
   const [bg,color,border] = palette[Math.abs(h)%palette.length].split("|");
   return { bg, color, border };
 }
+const MEMBER_COLOR_PALETTE = [
+  "#3b82f6","#ef4444","#10b981","#f59e0b","#8b5cf6",
+  "#ec4899","#06b6d4","#f97316","#84cc16","#6366f1",
+  "#14b8a6","#e11d48","#7c3aed","#0284c7","#16a34a",
+  "#b45309","#2563eb","#c026d3","#0891b2","#ca8a04",
+];
+let _memberColorMap = {};
+
+function assignMemberColors(names) {
+  const sorted = [...new Set(names)].filter(Boolean).sort();
+  const used   = new Set(Object.values(_memberColorMap));
+  sorted.forEach(name => {
+    if (_memberColorMap[name]) return;
+    const free  = MEMBER_COLOR_PALETTE.find(c => !used.has(c));
+    const color = free || MEMBER_COLOR_PALETTE[Object.keys(_memberColorMap).length % MEMBER_COLOR_PALETTE.length];
+    _memberColorMap[name] = color;
+    used.add(color);
+  });
+}
+
 function memberColor(name) {
-  const palette = ["#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#10b981","#f97316"];
+  if (_memberColorMap[name]) return _memberColorMap[name];
+  // Fallback hash when assignMemberColors hasn't run yet
   let h = 0;
   for (const c of (name || "")) h = ((h << 5) - h + c.charCodeAt(0)) | 0;
-  return palette[Math.abs(h) % palette.length];
+  return MEMBER_COLOR_PALETTE[Math.abs(h) % MEMBER_COLOR_PALETTE.length];
 }
 
 function renderCalendar() {
@@ -1492,6 +1518,7 @@ function renderCalendarGrid() {
   const allNames = _calEvents.length
     ? [...new Set(_calEvents.map(e => e.memberName))].filter(Boolean)
     : (SESSION.role === "Manager" ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])] : [SESSION.name]);
+  assignMemberColors(allNames);
   const legendItems = allNames.map(n =>
     `<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6b7280;white-space:nowrap;">
       <div style="width:7px;height:7px;border-radius:50%;background:${memberColor(n)};flex-shrink:0;"></div>${n.split(" ")[0]}
@@ -1560,6 +1587,7 @@ function renderYearView() {
   const allNames = yEvts.length
     ? [...new Set(yEvts.map(e => e.memberName))].filter(Boolean)
     : (SESSION.role === "Manager" ? [SESSION.name, ...SESSION.memberRows.map(r => r[0])] : [SESSION.name]);
+  assignMemberColors(allNames);
   const legendItems = allNames.map(n =>
     `<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6b7280;white-space:nowrap;">
       <div style="width:7px;height:7px;border-radius:50%;background:${memberColor(n)};flex-shrink:0;"></div>${n.split(" ")[0]}
