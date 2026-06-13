@@ -4274,7 +4274,7 @@ function renderTeamEvents() {
   const availTeams = SESSION.role === "Manager" ? (SESSION.teams||[]) : (SESSION.teams||[]);
   if (!_activeTeamCal) _activeTeamCal = SESSION.role === "Manager" ? "all" : (availTeams[0] || "");
   if (_teamEventsLoaded) {
-    _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+    _renderTeamCalView();
     _bgRefreshTeamEvents();
   } else {
     document.getElementById("events-main").innerHTML = `<div class="spinner"></div>`;
@@ -4286,7 +4286,7 @@ async function loadTeamEvents() {
   const cached = _sGet("tmgr_tevents");
   if (cached) {
     _teamEvents = cached; _teamEventsLoaded = true;
-    _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+    _renderTeamCalView();
   }
   try {
     const rows  = await readSheet(CALENDAR_SHEET_ID, TEAM_EVENTS_SHEET_NAME);
@@ -4294,13 +4294,13 @@ async function loadTeamEvents() {
     _sSet("tmgr_tevents", fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_teamEvents)) {
       _teamEvents = fresh;
-      _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+      _renderTeamCalView();
     }
     _teamEventsLoaded = true;
   } catch(e) {
     if (!cached) {
       _teamEvents = []; _teamEventsLoaded = true;
-      _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+      _renderTeamCalView();
     }
   }
 }
@@ -4312,24 +4312,30 @@ async function _bgRefreshTeamEvents() {
     _sSet("tmgr_tevents", fresh);
     if (JSON.stringify(fresh) !== JSON.stringify(_teamEvents)) {
       _teamEvents = fresh;
-      _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+      _renderTeamCalView();
     }
   } catch {}
+}
+
+function _renderTeamCalView() {
+  if (_teamCalView === "year") renderTEventsYearView();
+  else if (_teamCalView === "list") renderTEventsListView();
+  else renderTEventsGrid();
 }
 
 async function reloadTeamEvents() {
   const rows = await readSheet(CALENDAR_SHEET_ID, TEAM_EVENTS_SHEET_NAME);
   _teamEvents = rowsToTeamEvents(rows);
   _sSet("tmgr_tevents", _teamEvents);
-  _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid();
+  _renderTeamCalView();
 }
 
-function setActiveTeamCal(team) { _activeTeamCal = team; _teamCalView === "year" ? renderTEventsYearView() : renderTEventsGrid(); }
+function setActiveTeamCal(team) { _activeTeamCal = team; _renderTeamCalView(); }
 function teamCalPrevMonth() { if (_teamCalMonth===0){_teamCalMonth=11;_teamCalYear--;}else _teamCalMonth--; renderTEventsGrid(); }
 function teamCalNextMonth() { if (_teamCalMonth===11){_teamCalMonth=0;_teamCalYear++;}else _teamCalMonth++; renderTEventsGrid(); }
-function teamCalPrevYear()  { _teamCalYear--; renderTEventsYearView(); }
-function teamCalNextYear()  { _teamCalYear++; renderTEventsYearView(); }
-function setTeamCalView(v)  { _teamCalView=v; v==="year"?renderTEventsYearView():renderTEventsGrid(); }
+function teamCalPrevYear()  { _teamCalYear--; _teamCalView==="list"?renderTEventsListView():renderTEventsYearView(); }
+function teamCalNextYear()  { _teamCalYear++; _teamCalView==="list"?renderTEventsListView():renderTEventsYearView(); }
+function setTeamCalView(v)  { _teamCalView=v; _renderTeamCalView(); }
 function switchToTeamCalMonth(mi) { _teamCalMonth=mi; setTeamCalView("month"); }
 
 function _tEventsTeamSwitcher(availTeams) {
@@ -4353,10 +4359,103 @@ function _tEventsTeamSwitcher(availTeams) {
 }
 
 function _tEventsCalViewToggle() {
+  const btn = (v, label) => {
+    const active = _teamCalView === v;
+    return `<button onclick="setTeamCalView('${v}')" style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${active?'#1b4332':'transparent'};color:${active?'#fff':'#6b7280'};">${label}</button>`;
+  };
   return `<div style="display:flex;background:#f0fdf4;border-radius:7px;padding:2px;border:1px solid #d1fae5;">
-    <button onclick="setTeamCalView('month')" style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${_teamCalView==='month'?'#1b4332':'transparent'};color:${_teamCalView==='month'?'#fff':'#6b7280'};">Month</button>
-    <button onclick="setTeamCalView('year')"  style="padding:3px 9px;border-radius:5px;font-size:10px;font-weight:700;border:none;cursor:pointer;background:${_teamCalView==='year'?'#1b4332':'transparent'};color:${_teamCalView==='year'?'#fff':'#6b7280'};">Year</button>
+    ${btn('month','Month')}${btn('year','Year')}${btn('list','List')}
   </div>`;
+}
+
+function renderTEventsListView() {
+  const year    = _teamCalYear;
+  const yStart  = `${year}-01-01`, yEnd = `${year}-12-31`;
+  const showAll = _activeTeamCal === "all";
+  const yEvts   = _teamEvents.filter(e =>
+    (showAll || e.team === _activeTeamCal) && e.endDate >= yStart && e.startDate <= yEnd
+  );
+
+  const isManager  = SESSION.role === "Manager";
+  const availTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+  const colSpan    = isManager ? 5 : 4;
+
+  const calcDays = (s, e) => Math.round((new Date(e+"T00:00:00") - new Date(s+"T00:00:00")) / 86400000) + 1;
+
+  // group by team (sorted), within each team sort by start date
+  const teamKeys = showAll
+    ? [...new Set(yEvts.map(e => e.team))].sort()
+    : [_activeTeamCal];
+
+  const groups = teamKeys.map(team => ({
+    team,
+    color: memberColor(team),
+    events: yEvts.filter(e => e.team === team).sort((a,b) => a.startDate.localeCompare(b.startDate))
+  })).filter(g => g.events.length > 0);
+
+  const totalCount = groups.reduce((n, g) => n + g.events.length, 0);
+
+  const bodyRows = groups.map(g => {
+    const teamHeader = `<tr>
+      <td colspan="${colSpan}" style="padding:8px 14px;background:#f0fdf4;border-top:2px solid #d1fae5;border-bottom:1px solid #d1fae5;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:10px;height:10px;border-radius:50%;background:${g.color};flex-shrink:0;"></div>
+          <span style="font-size:13px;font-weight:700;color:#1b4332;">${g.team}</span>
+          <span style="font-size:11px;color:#9ca3af;">${g.events.length} event${g.events.length!==1?"s":""}</span>
+        </div>
+      </td>
+    </tr>`;
+    const evtRows = g.events.map((e, i) => {
+      const days  = calcDays(e.startDate, e.endDate);
+      const rowBg = i % 2 === 0 ? "#fff" : "#fafafa";
+      return `<tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+        <td style="padding:9px 14px 9px 28px;font-size:12px;font-weight:600;color:#1b4332;">${e.title}</td>
+        <td style="padding:9px 14px;white-space:nowrap;font-size:12px;color:#374151;">${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)}</td>
+        <td style="padding:9px 14px;font-size:12px;color:#6b7280;text-align:center;white-space:nowrap;">${days} day${days!==1?"s":""}</td>
+        <td style="padding:9px 14px;font-size:12px;color:#9ca3af;">${e.desc || "—"}</td>
+        ${isManager ? `<td style="padding:9px 10px;white-space:nowrap;">
+          <button onclick="openTeamEventEditModal(${e.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:none;cursor:pointer;">Edit</button>
+        </td>` : ""}
+      </tr>`;
+    }).join("");
+    return teamHeader + evtRows;
+  }).join("");
+
+  const el = document.getElementById("events-main");
+  if (!el) return;
+  el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
+    <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
+        <button onclick="teamCalPrevYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;flex-shrink:0;">&#8249;</button>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;flex:1;">
+          <span style="font-size:15px;font-weight:700;color:#1b4332;">${year} — Event List</span>
+          ${_tEventsCalViewToggle()}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <button onclick="openTeamEventAddModal(null)" style="background:#1b4332;color:#fff;font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;border:none;cursor:pointer;">+ Add</button>
+          <button onclick="teamCalNextYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;">&#8250;</button>
+        </div>
+      </div>
+      ${groups.length === 0
+        ? `<div style="padding:3rem;text-align:center;color:#9ca3af;">No events recorded for ${year}.</div>`
+        : `<div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="background:#f9fafb;">
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:left;border-bottom:2px solid #d1fae5;">Event</th>
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:left;white-space:nowrap;border-bottom:2px solid #d1fae5;">Date Range</th>
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:center;white-space:nowrap;border-bottom:2px solid #d1fae5;">Days</th>
+                  <th style="padding:9px 14px;font-weight:600;color:#1b4332;text-align:left;border-bottom:2px solid #d1fae5;">Description</th>
+                  ${isManager ? `<th style="padding:9px 10px;border-bottom:2px solid #d1fae5;"></th>` : ""}
+                </tr>
+              </thead>
+              <tbody>${bodyRows}</tbody>
+            </table>
+            <div style="padding:10px 14px;border-top:1px solid #f3f4f6;font-size:12px;color:#9ca3af;text-align:right;">
+              ${totalCount} total event${totalCount!==1?"s":""} across ${groups.length} team${groups.length!==1?"s":""}
+            </div>
+          </div>`}
+    </div>`;
 }
 
 function renderTEventsGrid() {
