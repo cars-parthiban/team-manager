@@ -4272,7 +4272,7 @@ function renderTeamEvents() {
   document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
     tabBarHTML() + `<div id="events-main"></div>`);
   const availTeams = SESSION.role === "Manager" ? (SESSION.teams||[]) : (SESSION.teams||[]);
-  if (!_activeTeamCal) _activeTeamCal = SESSION.role === "Manager" ? "all" : (availTeams[0] || "");
+  if (!_activeTeamCal) _activeTeamCal = (SESSION.role === "Manager" || availTeams.length > 1) ? "all" : (availTeams[0] || "");
   if (_teamEventsLoaded) {
     _renderTeamCalView();
     _bgRefreshTeamEvents();
@@ -4341,12 +4341,12 @@ function switchToTeamCalMonth(mi) { _teamCalMonth=mi; setTeamCalView("month"); }
 function _tEventsTeamSwitcher(availTeams) {
   if (availTeams.length <= 1 && SESSION.role !== "Manager") return "";
   const buttons = [];
-  if (SESSION.role === "Manager") {
+  if (SESSION.role === "Manager" || availTeams.length > 1) {
     const on = _activeTeamCal === "all";
     buttons.push(`<button onclick="setActiveTeamCal('all')"
       style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;
       border:${on?"2px solid #1b4332":"1.5px solid #d1fae5"};
-      background:${on?"#1b4332":"#fff"};color:${on?"#fff":"#374151"};">All Teams</button>`);
+      background:${on?"#1b4332":"#fff"};color:${on?"#fff":"#374151"};">All</button>`);
   }
   availTeams.forEach(t => {
     const on = _activeTeamCal === t;
@@ -4371,7 +4371,7 @@ function _tEventsCalViewToggle() {
 function renderTEventsListView() {
   const year    = _teamCalYear;
   const yStart  = `${year}-01-01`, yEnd = `${year}-12-31`;
-  const showAll     = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const showAll      = _activeTeamCal === "all";
   const memberTeamsL = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const yEvts   = _teamEvents.filter(e =>
     (showAll || e.team === _activeTeamCal) && (!memberTeamsL || memberTeamsL.has(e.team)) &&
@@ -4472,7 +4472,7 @@ function renderTEventsGrid() {
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
   const mStart   = `${year}-${String(month+1).padStart(2,"0")}-01`;
   const mEnd     = `${year}-${String(month+1).padStart(2,"0")}-${String(dim).padStart(2,"0")}`;
-  const showAll    = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const showAll     = _activeTeamCal === "all";
   const memberTeams = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const mEvts    = _teamEvents.filter(e => (showAll || e.team === _activeTeamCal) && (!memberTeams || memberTeams.has(e.team)) && e.endDate >= mStart && e.startDate <= mEnd);
 
@@ -4544,7 +4544,7 @@ function renderTEventsYearView() {
   const year = _teamCalYear;
   const td = new Date();
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
-  const showAllY    = SESSION.role === "Manager" && _activeTeamCal === "all";
+  const showAllY     = _activeTeamCal === "all";
   const memberTeamsY = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const yEvts = _teamEvents.filter(e => (showAllY || e.team===_activeTeamCal) && (!memberTeamsY || memberTeamsY.has(e.team)) && e.endDate>=`${year}-01-01` && e.startDate<=`${year}-12-31`);
 
