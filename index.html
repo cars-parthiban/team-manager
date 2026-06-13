@@ -1348,7 +1348,11 @@ function switchTab(tab) {
     const mt = SESSION.teams||[];
     _calFilterTeam = (SESSION.role === "Manager" || mt.length > 1) ? "all" : (mt[0] || "all");
   }
-  if (tab === "events")   _teamCalView = "month";
+  if (tab === "events") {
+    _teamCalView = "month";
+    const et = SESSION.teams||[];
+    _activeTeamCal = (SESSION.role === "Manager" || et.length > 1) ? "all" : (et[0] || "");
+  }
   render();
 }
 
