@@ -192,7 +192,7 @@ const LOGO = `<svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns=
 let SESSION        = null;
 let _proxySession  = null;
 let _activeTab     = "tasks";
-let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date().getMonth(), _calModal = null, _calView = "month";
+let _calEvents = [], _calYear = new Date().getFullYear(), _calMonth = new Date().getMonth(), _calModal = null, _calView = "month", _calFilterTeam = "";
 let _calLoaded = false;
 let _actLoaded = false;
 let _contactsLoaded = false;
@@ -1343,7 +1343,11 @@ function tabBarHTML() {
 
 function switchTab(tab) {
   _activeTab = tab;
-  if (tab === "calendar") _calView = "month";
+  if (tab === "calendar") {
+    _calView = "month";
+    const mt = SESSION.teams||[];
+    _calFilterTeam = (SESSION.role === "Manager" || mt.length > 1) ? "all" : (mt[0] || "all");
+  }
   if (tab === "events")   _teamCalView = "month";
   render();
 }
@@ -1409,6 +1413,59 @@ function memberColor(name) {
   let h = 0;
   for (const c of (name || "")) h = ((h << 5) - h + c.charCodeAt(0)) | 0;
   return MEMBER_COLOR_PALETTE[Math.abs(h) % MEMBER_COLOR_PALETTE.length];
+}
+
+function _getMemberTeams(name) {
+  const row = (window._configRows || []).find(r => r[0] === name);
+  return row ? (row[6]||"").split(",").map(t=>t.trim()).filter(Boolean) : [];
+}
+
+function _calAvailTeams() {
+  return SESSION.role === "Manager"
+    ? (getTeamNames().length ? getTeamNames() : (SESSION.teams||[]))
+    : (SESSION.teams||[]);
+}
+
+function _filteredCalEvents() {
+  const myTeams   = new Set(SESSION.teams||[]);
+  const isManager = SESSION.role === "Manager";
+  return _calEvents.filter(e => {
+    const evtTeams = new Set(_getMemberTeams(e.memberName));
+    // members: only see events from people who share at least one team
+    if (!isManager && ![...myTeams].some(t => evtTeams.has(t))) return false;
+    // active team filter
+    if (_calFilterTeam && _calFilterTeam !== "all") return evtTeams.has(_calFilterTeam);
+    return true;
+  });
+}
+
+function setCalFilterTeam(team) {
+  _calFilterTeam = team;
+  _renderCalView();
+}
+
+function _calTeamSwitcherHTML() {
+  const availTeams = _calAvailTeams();
+  if (availTeams.length <= 1 && SESSION.role !== "Manager") return "";
+  const showAll = SESSION.role === "Manager" || availTeams.length > 1;
+  const buttons = [];
+  if (showAll) {
+    const on = _calFilterTeam === "all";
+    buttons.push(`<button onclick="setCalFilterTeam('all')"
+      style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;
+      border:${on?"2px solid #1b4332":"1.5px solid #d1fae5"};
+      background:${on?"#1b4332":"#fff"};color:${on?"#fff":"#374151"};">All</button>`);
+  }
+  availTeams.forEach(t => {
+    const on = _calFilterTeam === t;
+    buttons.push(`<button onclick="setCalFilterTeam('${t.replace(/'/g,"&#39;")}')"
+      style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;
+      border:${on?"2px solid #1b4332":"1.5px solid #d1fae5"};
+      background:${on?"#1b4332":"#fff"};color:${on?"#fff":"#374151"};">${t}</button>`);
+  });
+  return buttons.length
+    ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">${buttons.join("")}</div>`
+    : "";
 }
 
 function renderCalendar() {
@@ -1484,7 +1541,7 @@ function renderCalendarGrid() {
   const todayStr  = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
   const mStart    = `${year}-${String(month+1).padStart(2,"0")}-01`;
   const mEnd      = `${year}-${String(month+1).padStart(2,"0")}-${String(daysInMonth).padStart(2,"0")}`;
-  const monthEvts = _calEvents.filter(e => e.endDate >= mStart && e.startDate <= mEnd);
+  const monthEvts = _filteredCalEvents().filter(e => e.endDate >= mStart && e.startDate <= mEnd);
 
   const cells = Array(firstDay).fill(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
@@ -1532,7 +1589,7 @@ function renderCalendarGrid() {
   ).join("");
 
   const el = document.getElementById("cal-main");
-  if (el) el.innerHTML = `
+  if (el) el.innerHTML = _calTeamSwitcherHTML() + `
     <div style="overflow-x:auto;">
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;min-width:560px;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
@@ -1588,7 +1645,7 @@ function renderListView() {
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const year   = _calYear;
   const yStart = `${year}-01-01`, yEnd = `${year}-12-31`;
-  const yEvts  = _calEvents.filter(e => e.endDate >= yStart && e.startDate <= yEnd);
+  const yEvts  = _filteredCalEvents().filter(e => e.endDate >= yStart && e.startDate <= yEnd);
 
   const allNames = yEvts.length
     ? [...new Set(yEvts.map(e => e.memberName))].filter(Boolean).sort()
@@ -1645,7 +1702,7 @@ function renderListView() {
 
   const el = document.getElementById("cal-main");
   if (!el) return;
-  el.innerHTML = `
+  el.innerHTML = _calTeamSwitcherHTML() + `
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
         <button onclick="calPrevYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;flex-shrink:0;">&#8249;</button>
@@ -1686,7 +1743,7 @@ function renderYearView() {
   const td      = new Date();
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
   const yStart  = `${year}-01-01`, yEnd = `${year}-12-31`;
-  const yEvts   = _calEvents.filter(e => e.endDate >= yStart && e.startDate <= yEnd);
+  const yEvts   = _filteredCalEvents().filter(e => e.endDate >= yStart && e.startDate <= yEnd);
 
   const allNames = yEvts.length
     ? [...new Set(yEvts.map(e => e.memberName))].filter(Boolean)
@@ -1751,7 +1808,7 @@ function renderYearView() {
   });
 
   const el = document.getElementById("cal-main");
-  if (el) el.innerHTML = `
+  if (el) el.innerHTML = _calTeamSwitcherHTML() + `
     <div style="overflow-x:auto;">
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;min-width:600px;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
