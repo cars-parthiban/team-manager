@@ -202,6 +202,7 @@ let _obTemplate      = [], _obStatus = [], _obLoaded = false;
 let _obActiveMember  = null, _obView = "checklist", _obActiveTeam = "";
 let _obTmplDragging  = null;
 let _obStatusDragging = null;
+let _obStatusSortCol = "", _obStatusSortDir = "asc";
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
@@ -4029,7 +4030,7 @@ function _renderObContent() {
 
 function _obSetView(v) { _obView = v; _renderObContent(); }
 function _obSetTeam(t) { _obActiveTeam = t; _renderObContent(); }
-function _obSelectMember(n) { _obActiveMember = n; _renderObContent(); }
+function _obSelectMember(n) { _obActiveMember = n; _obStatusSortCol = ""; _obStatusSortDir = "asc"; _renderObContent(); }
 
 function _renderObChecklistView() {
   const allMembers = (window._configRows||[]).filter(r => r[0]);
@@ -4085,6 +4086,23 @@ function _applyObStatusOrder(items, name) {
   const rest = items.filter(s => !order.includes(s.statusId));
   return [...sorted, ...rest];
 }
+function setObStatusSort(col) {
+  if (_obStatusSortCol === col) _obStatusSortDir = _obStatusSortDir === "asc" ? "desc" : "asc";
+  else { _obStatusSortCol = col; _obStatusSortDir = "asc"; }
+  const panel = document.getElementById("ob-right-panel");
+  if (panel && _obActiveMember) panel.innerHTML = _renderObMemberChecklist(_obActiveMember);
+}
+function _sortedObItems(items) {
+  if (!_obStatusSortCol) return items;
+  const dir = _obStatusSortDir === "asc" ? 1 : -1;
+  return [...items].sort((a, b) => String(a[_obStatusSortCol]||"").localeCompare(String(b[_obStatusSortCol]||"")) * dir);
+}
+function _thObSort(label, col) {
+  const active = _obStatusSortCol === col;
+  const arrow  = active ? (_obStatusSortDir === "asc" ? " ▲" : " ▼") : ` <span style="color:#d1d5db;font-size:9px;">↕</span>`;
+  const border = active ? "border-bottom:2px solid #1b4332" : "border-bottom:1px solid #e5e7eb";
+  return `<th onclick="setObStatusSort('${col}')" style="padding:8px 10px;font-weight:600;color:#1b4332;${border};white-space:nowrap;cursor:pointer;user-select:none;font-size:12px;background:#f9fafb;">${label}${arrow}</th>`;
+}
 function obStatusDragStart(e, id) {
   _obStatusDragging = id;
   e.dataTransfer.effectAllowed = "move";
@@ -4138,39 +4156,61 @@ function _renderObMemberChecklist(memberName) {
       <span style="font-size:12px;font-weight:600;color:${pct===100?"#16a34a":"#1b4332"};white-space:nowrap;">${done}/${total} complete${pct===100?" ✓":""}</span>
     </div>` : "";
 
-  const categoryHTML = orderedItems.map(s => {
+  const sortActive   = !!_obStatusSortCol;
+  const displayItems = sortActive ? _sortedObItems(orderedItems) : orderedItems;
+  const tableRows = displayItems.map(s => {
     const isDone    = s.status === "Done";
     const safeName  = memberName.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
     const isCustom  = s.templateId === "custom";
     const catLabel  = s.category || "General";
-    const teamLabel = isCustom ? "Custom" : (s.team || "");
+    const teamLabel = isCustom ? "Custom" : (s.team || "—");
     const teamBg    = isCustom ? "#f3f4f6" : "#dbeafe";
     const teamFg    = isCustom ? "#6b7280" : "#1d4ed8";
-    return `
-      <div class="ob-status-row" data-sid="${escHtml(s.statusId)}" data-done="${isDone?1:0}"
-           draggable="true"
-           ondragstart="obStatusDragStart(event,'${s.statusId}')"
-           ondragover="obStatusDragOver(event,'${s.statusId}')"
-           ondrop="obStatusDrop(event,'${s.statusId}')"
-           ondragend="obStatusDragEnd()"
-           style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;
-                  background:${isDone?"#f0fdf4":"#fafafa"};border:1px solid ${isDone?"#d1fae5":"#e5e7eb"};
-                  margin-bottom:5px;cursor:grab;">
-        <span style="color:#9ca3af;font-size:13px;flex-shrink:0;cursor:grab;margin-top:2px;" title="Drag to reorder">⠿</span>
+    const dragAttrs = sortActive ? "" :
+      `draggable="true" ondragstart="obStatusDragStart(event,'${s.statusId}')"
+       ondragover="obStatusDragOver(event,'${s.statusId}')"
+       ondrop="obStatusDrop(event,'${s.statusId}')"
+       ondragend="obStatusDragEnd()"`;
+    return `<tr class="ob-status-row" data-sid="${escHtml(s.statusId)}" data-done="${isDone?1:0}"
+              ${dragAttrs}
+              style="background:${isDone?"#f0fdf4":"#fff"};border-bottom:1px solid #f3f4f6;${sortActive?"":"cursor:grab;"}">
+      <td style="padding:8px 6px 8px 10px;color:#d1d5db;font-size:13px;width:20px;text-align:center;">
+        ${sortActive ? "" : `<span title="Drag to reorder" style="cursor:grab;">⠿</span>`}
+      </td>
+      <td style="padding:8px 6px;width:32px;text-align:center;">
         <input type="checkbox" ${isDone?"checked":""} onchange="obToggleItem('${s.statusId}','${safeName}')"
-          style="width:16px;height:16px;cursor:pointer;accent-color:#1b4332;flex-shrink:0;margin-top:2px;"/>
-        <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-            <span style="font-size:11px;font-weight:600;color:#1b4332;background:#d1fae5;padding:1px 7px;border-radius:999px;white-space:nowrap;flex-shrink:0;">${escHtml(catLabel)}</span>
-            <span style="font-size:13px;color:${isDone?"#9ca3af":"#374151"};${isDone?"text-decoration:line-through;":""}">${escHtml(s.item)}</span>
-            ${teamLabel?`<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:${teamBg};color:${teamFg};flex-shrink:0;">${escHtml(teamLabel)}</span>`:""}
-          </div>
-          ${isDone&&s.completedDate?`<div style="font-size:11px;color:#9ca3af;margin-top:2px;">Done ${s.completedDate}</div>`:""}
-        </div>
+          style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;"/>
+      </td>
+      <td style="padding:8px 10px;white-space:nowrap;">
+        <span style="font-size:11px;font-weight:600;color:#1b4332;background:#d1fae5;padding:2px 8px;border-radius:999px;">${escHtml(catLabel)}</span>
+      </td>
+      <td style="padding:8px 10px;font-size:13px;color:${isDone?"#9ca3af":"#374151"};${isDone?"text-decoration:line-through;":""}">
+        ${escHtml(s.item)}
+        ${isDone&&s.completedDate?`<div style="font-size:10px;color:#9ca3af;text-decoration:none;">Done ${s.completedDate}</div>`:""}
+      </td>
+      <td style="padding:8px 10px;white-space:nowrap;">
+        <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:${teamBg};color:${teamFg};">${escHtml(teamLabel)}</span>
+      </td>
+      <td style="padding:8px 6px;text-align:center;">
         <button onclick="obDeleteStatusItem('${s.statusId}','${safeName}')"
-          title="Remove" style="background:none;border:none;cursor:pointer;color:#d1d5db;font-size:16px;padding:0 2px;flex-shrink:0;line-height:1;">×</button>
-      </div>`;
+          title="Remove" style="background:none;border:none;cursor:pointer;color:#d1d5db;font-size:16px;line-height:1;">×</button>
+      </td>
+    </tr>`;
   }).join("");
+
+  const categoryHTML = `<div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr>
+        <th style="width:20px;background:#f9fafb;border-bottom:1px solid #e5e7eb;"></th>
+        <th style="width:32px;background:#f9fafb;border-bottom:1px solid #e5e7eb;"></th>
+        ${_thObSort("Category","category")}
+        ${_thObSort("Item","item")}
+        ${_thObSort("Team","team")}
+        <th style="background:#f9fafb;border-bottom:1px solid #e5e7eb;"></th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+  </div>`;
 
   const emptyState = !items.length ? `
     <div style="text-align:center;padding:32px;color:#9ca3af;font-size:13px;background:#f9fafb;border-radius:10px;">
