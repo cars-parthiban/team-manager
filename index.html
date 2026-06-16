@@ -716,9 +716,10 @@ function renderMemberTable() {
     return;
   }
 
-  const bodyRows = tasks.length === 0
+  const sortedMember = _sortedTasks(tasks);
+  const bodyRows = sortedMember.length === 0
     ? `<tr><td colspan="8" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks yet.</td></tr>`
-    : tasks.map(t => {
+    : sortedMember.map(t => {
         const ov = isOverdue(t.dueDate) && t.status !== "Completed";
         return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
           <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
@@ -742,7 +743,14 @@ function renderMemberTable() {
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
-          ${["Task ID","Task","Due Date","Priority","Status","Notes","URL","Actions"].map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+          ${_thSort("Task ID","taskId")}
+          ${_thSort("Task","task")}
+          ${_thSort("Due Date","dueDate")}
+          ${_thSort("Priority","priority")}
+          ${_thSort("Status","status")}
+          ${_thSort("Notes","notes")}
+          ${_thSort("URL","url")}
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -792,6 +800,35 @@ let _editingTask = null;
 let _addTaskMembers = new Set();
 let _selectedTaskRows = new Set();
 let _taskView = "grid";
+let _taskSortCol = "", _taskSortDir = "asc";
+
+function setTaskSort(col) {
+  if (_taskSortCol === col) _taskSortDir = _taskSortDir === "asc" ? "desc" : "asc";
+  else { _taskSortCol = col; _taskSortDir = "asc"; }
+  if (SESSION.role === "Manager") renderManagerTable();
+  else renderMemberTable();
+}
+
+function _sortedTasks(tasks) {
+  if (!_taskSortCol) return tasks;
+  const dir = _taskSortDir === "asc" ? 1 : -1;
+  const priorityRank = { "High": 0, "Medium": 1, "Low": 2 };
+  const statusRank   = { "Not Started": 0, "In Progress": 1, "Completed": 2 };
+  return [...tasks].sort((a, b) => {
+    let av = a[_taskSortCol] ?? "", bv = b[_taskSortCol] ?? "";
+    if (_taskSortCol === "priority") return ((priorityRank[av]??1) - (priorityRank[bv]??1)) * dir;
+    if (_taskSortCol === "status")   return ((statusRank[av]??0)   - (statusRank[bv]??0))   * dir;
+    if (_taskSortCol === "dueDate")  { av = av||"9999-99-99"; bv = bv||"9999-99-99"; }
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+}
+
+function _thSort(label, col) {
+  const active = _taskSortCol === col;
+  const arrow  = active ? (_taskSortDir === "asc" ? " ▲" : " ▼") : ` <span style="color:#d1fae5;font-size:10px;">↕</span>`;
+  const border = active ? "border-bottom:2px solid #1b4332" : "border-bottom:2px solid #d1fae5";
+  return `<th onclick="setTaskSort('${col}')" style="padding:10px 12px;font-weight:600;color:#1b4332;${border};white-space:nowrap;cursor:pointer;user-select:none;" title="Sort by ${label}">${label}${arrow}</th>`;
+}
 
 function renderManager() {
   if (_activeTab === "calendar")   { renderCalendar();     return; }
@@ -903,10 +940,11 @@ function renderManagerTable(showAddForm) {
   }
 
   const IS = "font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #d1fae5;width:100%;";
-  const allChecked = filtered.length > 0 && filtered.every(t => _selectedTaskRows.has(t.rowIndex));
-  const bodyRows = filtered.length === 0
+  const sorted = _sortedTasks(filtered);
+  const allChecked = sorted.length > 0 && sorted.every(t => _selectedTaskRows.has(t.rowIndex));
+  const bodyRows = sorted.length === 0
     ? `<tr><td colspan="10" style="text-align:center;padding:3rem;color:#9ca3af;">No tasks found.</td></tr>`
-    : filtered.map(t => {
+    : sorted.map(t => {
         const ov      = isOverdue(t.dueDate) && t.status !== "Completed";
         const checked = _selectedTaskRows.has(t.rowIndex);
         const ri      = t.rowIndex;
@@ -941,8 +979,15 @@ function renderManagerTable(showAddForm) {
           <th style="padding:10px 12px;border-bottom:2px solid #d1fae5;text-align:center;">
             <input type="checkbox" ${allChecked?"checked":""} onchange="toggleSelectAll()" style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;" title="Select all"/>
           </th>
-          ${["Task ID","Assigned To","Task","Due Date","Priority","Status","Notes","URL","Actions"]
-            .map(h=>`<th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`).join("")}
+          ${_thSort("Task ID","taskId")}
+          ${_thSort("Assigned To","assignedTo")}
+          ${_thSort("Task","task")}
+          ${_thSort("Due Date","dueDate")}
+          ${_thSort("Priority","priority")}
+          ${_thSort("Status","status")}
+          ${_thSort("Notes","notes")}
+          ${_thSort("URL","url")}
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
