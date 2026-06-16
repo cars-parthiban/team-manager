@@ -699,15 +699,15 @@ function renderMemberTable() {
   const inProg = tasks.filter(t => t.status === "In Progress").length;
 
   const statsHTML = `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
       ${[["Total Tasks",total,"#1b4332"],["In Progress",inProg,"#1e40af"],["Completed",done,"#166534"]]
-        .map(([l,v,c])=>`<div style="background:#fff;border-radius:12px;padding:1rem 1.25rem;border:1px solid #d1fae5;text-align:center;">
-          <div style="font-size:28px;font-weight:700;color:${c};">${v}</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">${l}</div></div>`).join("")}
+        .map(([l,v,c])=>`<div style="background:#fff;border-radius:10px;padding:9px 14px;border:1px solid #d1fae5;display:flex;align-items:center;gap:10px;">
+          <div style="font-size:22px;font-weight:700;color:${c};line-height:1;">${v}</div>
+          <div style="font-size:11px;color:#6b7280;font-weight:500;">${l}</div></div>`).join("")}
     </div>`;
 
-  const addRow = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-    <button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
+  const addRow = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+    <button onclick="openAddTaskModal()" style="padding:7px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
     ${taskViewToggleHTML()}
   </div>`;
 
@@ -919,23 +919,32 @@ function renderManagerTable(showAddForm) {
     ? `<button onclick="setFilter('All')" style="padding:6px 14px;border-radius:999px;font-size:12px;border:1.5px solid #fca5a5;background:#fff1f2;color:#991b1b;font-weight:600;">✕ Clear filter</button>`
     : "";
 
+  const total   = filtered.length;
+  const inProg  = filtered.filter(t => t.status === "In Progress").length;
+  const done    = filtered.filter(t => t.status === "Completed").length;
+  const overdue = filtered.filter(t => isOverdue(t.dueDate) && t.status !== "Completed").length;
+  const statsHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+    ${[["Total",total,"#1b4332"],["In Progress",inProg,"#1e40af"],["Completed",done,"#166534"],["Overdue",overdue,"#dc2626"]]
+      .map(([l,v,c])=>`<div style="background:#fff;border-radius:10px;padding:9px 14px;border:1px solid #d1fae5;display:flex;align-items:center;gap:10px;">
+        <div style="font-size:22px;font-weight:700;color:${c};line-height:1;">${v}</div>
+        <div style="font-size:11px;color:#6b7280;font-weight:500;">${l}</div>
+      </div>`).join("")}
+  </div>`;
+
   const deleteSelBtn = _taskView === "grid" && _selectedTaskRows.size > 0
-    ? `<button onclick="deleteSelectedTasks()" style="padding:9px 18px;border-radius:8px;background:#dc2626;color:#fff;font-size:13px;font-weight:600;border:none;margin-left:8px;">Delete Selected (${_selectedTaskRows.size})</button>`
+    ? `<button onclick="deleteSelectedTasks()" style="padding:7px 14px;border-radius:8px;background:#dc2626;color:#fff;font-size:12px;font-weight:600;border:none;">Delete (${_selectedTaskRows.size})</button>`
     : "";
-  const addBtn = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
-    <div style="display:inline-flex;align-items:center;gap:8px;">
-      <button onclick="openAddTaskModal()" style="padding:9px 18px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
+  const topRow = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;align-items:center;">${filterBtns}${clearBtn}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <button onclick="openAddTaskModal()" style="padding:7px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
       ${deleteSelBtn}
+      ${taskViewToggleHTML()}
     </div>
-    <div style="flex:1;"></div>
-    ${taskViewToggleHTML()}
   </div>`;
 
   if (_taskView === "board") {
-    document.getElementById("manager-main").innerHTML = `
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">${filterBtns}${clearBtn}</div>
-      ${addBtn}
-      ${renderTaskBoard(filtered, true)}`;
+    document.getElementById("manager-main").innerHTML = statsHTML + topRow + renderTaskBoard(filtered, true);
     return;
   }
 
@@ -970,9 +979,7 @@ function renderManagerTable(showAddForm) {
           </td></tr>`;
       }).join("");
 
-  document.getElementById("manager-main").innerHTML = `
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">${filterBtns}${clearBtn}</div>
-    ${addBtn}
+  document.getElementById("manager-main").innerHTML = statsHTML + topRow + `
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
