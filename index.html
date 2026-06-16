@@ -200,6 +200,7 @@ let _commentsLoaded  = false;
 let _teamsList       = [], _teamsLoaded = false;
 let _obTemplate      = [], _obStatus = [], _obLoaded = false;
 let _obActiveMember  = null, _obView = "checklist", _obActiveTeam = "";
+let _obTmplDragging  = null;
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
@@ -4167,6 +4168,53 @@ function _renderObMemberChecklist(memberName) {
     </div>`;
 }
 
+function _getObTmplOrder(team) {
+  try { return JSON.parse(localStorage.getItem("tmgr_ob_tmpl_order_" + team) || "null") || null; } catch { return null; }
+}
+function _setObTmplOrder(team, order) {
+  try { localStorage.setItem("tmgr_ob_tmpl_order_" + team, JSON.stringify(order)); } catch {}
+}
+function _applyObTmplOrder(items, team) {
+  const order = _getObTmplOrder(team);
+  if (!order) return items;
+  const map = Object.fromEntries(items.map(t => [t.templateId, t]));
+  const sorted = order.map(id => map[id]).filter(Boolean);
+  const rest = items.filter(t => !order.includes(t.templateId));
+  return [...sorted, ...rest];
+}
+function obTmplDragStart(e, id) {
+  _obTmplDragging = id;
+  e.dataTransfer.effectAllowed = "move";
+}
+function obTmplDragOver(e, id) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".ob-tmpl-row").forEach(el => el.style.borderColor = "#e5e7eb");
+  if (_obTmplDragging !== id) {
+    const el = document.querySelector(`.ob-tmpl-row[data-tid="${id}"]`);
+    if (el) el.style.borderColor = "#1b4332";
+  }
+}
+function obTmplDrop(e, id) {
+  e.preventDefault();
+  if (!_obTmplDragging || _obTmplDragging === id) return;
+  const team = _obActiveTeam;
+  const items = _applyObTmplOrder(_obTemplate.filter(t => t.team === team), team);
+  const fromIdx = items.findIndex(t => t.templateId === _obTmplDragging);
+  const toIdx   = items.findIndex(t => t.templateId === id);
+  if (fromIdx < 0 || toIdx < 0) return;
+  const reordered = [...items];
+  const [moved] = reordered.splice(fromIdx, 1);
+  reordered.splice(toIdx, 0, moved);
+  _setObTmplOrder(team, reordered.map(t => t.templateId));
+  _obTmplDragging = null;
+  _renderObContent();
+}
+function obTmplDragEnd() {
+  _obTmplDragging = null;
+  document.querySelectorAll(".ob-tmpl-row").forEach(el => el.style.borderColor = "#e5e7eb");
+}
+
 function _renderObTemplateView() {
   const teamNames = _obTeamNames();
   if (!_obActiveTeam && teamNames.length > 0) _obActiveTeam = teamNames[0];
@@ -4177,11 +4225,18 @@ function _renderObTemplateView() {
              background:${_obActiveTeam===t?"#1b4332":"#f0fdf4"};color:${_obActiveTeam===t?"#fff":"#1b4332"};">
       ${escHtml(t)}</button>`).join("");
 
-  const teamItems = _obTemplate.filter(t => t.team === _obActiveTeam);
+  const teamItems = _applyObTmplOrder(_obTemplate.filter(t => t.team === _obActiveTeam), _obActiveTeam);
 
   const categoryHTML = teamItems.map(t => `
-    <div style="display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f9fafb;
-         border:1px solid #e5e7eb;border-radius:8px;margin-bottom:5px;">
+    <div class="ob-tmpl-row" data-tid="${escHtml(t.templateId)}"
+         draggable="true"
+         ondragstart="obTmplDragStart(event,'${t.templateId}')"
+         ondragover="obTmplDragOver(event,'${t.templateId}')"
+         ondrop="obTmplDrop(event,'${t.templateId}')"
+         ondragend="obTmplDragEnd()"
+         style="display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f9fafb;
+                border:1px solid #e5e7eb;border-radius:8px;margin-bottom:5px;cursor:grab;">
+      <span style="color:#9ca3af;font-size:13px;flex-shrink:0;cursor:grab;" title="Drag to reorder">⠿</span>
       <span style="font-size:11px;font-weight:600;color:#1b4332;background:#d1fae5;padding:2px 8px;
             border-radius:999px;white-space:nowrap;flex-shrink:0;">${escHtml(t.category||"General")}</span>
       <span style="flex:1;font-size:13px;color:#374151;">${escHtml(t.item)}</span>
