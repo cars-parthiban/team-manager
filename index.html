@@ -5315,7 +5315,13 @@ function renderRecurring() {
   const rows = _recurring.map(r => `
     <tr style="border-bottom:1px solid #f0fdf4;">
       <td style="padding:10px 12px;max-width:220px;font-weight:500;color:#111827;">${escHtml(r.title)}</td>
-      <td style="padding:10px 12px;white-space:nowrap;font-size:13px;color:#374151;">${escHtml(r.assignedTo)}</td>
+      <td style="padding:10px 12px;max-width:200px;">
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${(r.assignedTo||"").split(",").map(n=>n.trim()).filter(Boolean).map(n=>
+            `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#f0fdf4;color:#1b4332;border:1px solid #d1fae5;white-space:nowrap;">${escHtml(n)}</span>`
+          ).join("")}
+        </div>
+      </td>
       <td style="padding:10px 12px;">${freqBadge(r.frequency)}</td>
       <td style="padding:10px 12px;">${scheduleLabel(r)}</td>
       <td style="padding:10px 12px;">${priorityBadge(r.priority)}</td>
@@ -5375,8 +5381,15 @@ function openRecurringModal(recurringId) {
   const prioOpts = ["High","Medium","Low"].map(p =>
     `<option value="${p}" ${(existing?.priority||"Medium")===p?"selected":""}>${p}</option>`).join("");
 
-  const memberOpts = memberNames.map(n =>
-    `<option value="${n}" ${existing?.assignedTo===n?"selected":""}>${n}</option>`).join("");
+  const existingMembers = new Set((existing?.assignedTo||"").split(",").map(s=>s.trim()).filter(Boolean));
+
+  const memberCheckboxes = memberNames.map(n => {
+    const checked = existingMembers.has(n) ? "checked" : "";
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px;color:#374151;">
+      <input type="checkbox" name="rec-member" value="${escHtml(n)}" ${checked} style="accent-color:#1b4332;width:15px;height:15px;cursor:pointer;" />
+      ${escHtml(n)}
+    </label>`;
+  }).join("");
 
   const freq = existing?.frequency || "Weekly";
   const weeklyVis  = freq === "Weekly"  ? "" : "display:none;";
@@ -5391,10 +5404,10 @@ function openRecurringModal(recurringId) {
         <input id="rec-title" value="${escHtml(existing?.title||"")}" placeholder="e.g. Submit weekly status report"
           style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:14px;outline:none;" />
 
-        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Assigned To</label>
-        <select id="rec-assignedto" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:14px;outline:none;background:#fff;">
-          <option value="">— Select member —</option>${memberOpts}
-        </select>
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Assign To <span style="font-weight:400;color:#9ca3af;">(one task spawned per member)</span></label>
+        <div style="border:1.5px solid #d1fae5;border-radius:7px;padding:4px 6px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:2px;">
+          ${memberCheckboxes}
+        </div>
 
         <div style="display:flex;gap:12px;margin-bottom:14px;">
           <div style="flex:1;">
@@ -5463,7 +5476,8 @@ function closeRecurringModal() {
 
 async function saveRecurring(recurringId) {
   const title      = document.getElementById("rec-title").value.trim();
-  const assignedTo = document.getElementById("rec-assignedto").value;
+  const checked    = [...document.querySelectorAll("input[name='rec-member']:checked")].map(el => el.value);
+  const assignedTo = checked.join(",");
   const freq       = document.getElementById("rec-freq").value;
   const priority   = document.getElementById("rec-priority").value;
   const lead       = parseInt(document.getElementById("rec-lead").value) || 0;
@@ -5477,8 +5491,8 @@ async function saveRecurring(recurringId) {
     schedule = String(Math.min(28, Math.max(1, n || 1)));
   }
 
-  if (!title)      { showToast("Title is required"); return; }
-  if (!assignedTo) { showToast("Please select a team member"); return; }
+  if (!title)           { showToast("Title is required"); return; }
+  if (!assignedTo)      { showToast("Select at least one team member"); return; }
   if (freq === "Weekly"  && !schedule) { showToast("Select a day of week"); return; }
   if (freq === "Monthly" && !schedule) { showToast("Enter a day of month"); return; }
 
