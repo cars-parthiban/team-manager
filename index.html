@@ -1394,11 +1394,11 @@ function tabBarHTML() {
   if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
   if (SESSION.role === "Manager") tabs.push(["recurring","Recurring"]);
   tabs.push(["archive","Archive"]);
-  return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
+  return `<div style="overflow-x:auto;margin-bottom:24px;"><div style="display:flex;gap:4px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;min-width:100%;">` +
     tabs.map(([id,label]) => {
       const a = _activeTab === id;
-      return `<button onclick="switchTab('${id}')" style="padding:7px 22px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
-    }).join("") + `</div>`;
+      return `<button onclick="switchTab('${id}')" style="padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;white-space:nowrap;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
+    }).join("") + `</div></div>`;
 }
 
 function switchTab(tab) {
