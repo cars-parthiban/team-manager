@@ -47,6 +47,7 @@ const TEAM_EVENTS_SHEET_NAME    = "Team_Events";
 const ARCHIVE_SHEET_NAME        = "Archive";
 const CONTACTS_SHEET_NAME       = "Contacts";
 const COMMENTS_SHEET_NAME       = "Comments";
+const RECURRING_SHEET_NAME      = "Recurring_Tasks";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -202,6 +203,7 @@ let _obTemplate      = [], _obStatus = [], _obLoaded = false;
 let _obActiveMember  = null, _obView = "checklist", _obActiveTeam = "";
 let _obTmplDragging  = null;
 let _obStatusDragging = null;
+let _recurring = [], _recurringLoaded = false;
 let _obStatusSortCol = "", _obStatusSortDir = "asc";
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
@@ -520,9 +522,9 @@ function prefetchAllTabs() {
 
 function refreshView() {
   // Clear disk cache so next background fetch pulls fresh data
-  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY); _sDel(COMMENTS_CACHE_KEY); _sDel(TEAMS_CACHE_KEY); _sDel(ONBOARDING_TMPL_KEY); _sDel(ONBOARDING_STATUS_KEY);
+  clearTasksCache(); _sDel(CAL_CACHE_KEY); _sDel(ACT_CACHE_KEY); _sDel(LINKS_CACHE_KEY); _sDel("tmgr_tevents"); _sDel(ARCHIVE_CACHE_KEY); _sDel(CONTACTS_CACHE_KEY); _sDel(COMMENTS_CACHE_KEY); _sDel(TEAMS_CACHE_KEY); _sDel(ONBOARDING_TMPL_KEY); _sDel(ONBOARDING_STATUS_KEY); _sDel(RECURRING_CACHE_KEY);
   // Reset loaded flags so tabs re-fetch on next visit
-  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false; _commentsLoaded = false; _obLoaded = false; _teamsLoaded = false;
+  _calLoaded = false; _actLoaded = false; _linksLoaded = false; _teamEventsLoaded = false; _archiveLoaded = false; _contactsLoaded = false; _commentsLoaded = false; _obLoaded = false; _teamsLoaded = false; _recurringLoaded = false;
   // Keep in-memory data — render is instant, background refresh updates silently
   render();
   showToast("Refreshing in background…");
@@ -558,6 +560,7 @@ const ONBOARDING_TMPL_SHEET    = "Onboarding_Template";
 const ONBOARDING_STATUS_SHEET  = "Onboarding_Status";
 const ONBOARDING_TMPL_KEY      = "tmgr_ob_tmpl";
 const ONBOARDING_STATUS_KEY    = "tmgr_ob_status";
+const RECURRING_CACHE_KEY      = "tmgr_recurring";
 
 // ── MEMBER VIEW ────────────────────────────────────────────────────────────────
 let _memberTasks = [];
@@ -842,6 +845,7 @@ function renderManager() {
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
   if (_activeTab === "onboarding") { renderOnboarding();   return; }
+  if (_activeTab === "recurring")  { renderRecurring();    return; }
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
   if (_allTasks.length > 0) {
     renderManagerTable();
@@ -1388,6 +1392,7 @@ function tabBarHTML() {
   tabs.push(["directory","Directory"]);
   if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
   if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
+  if (SESSION.role === "Manager") tabs.push(["recurring","Recurring"]);
   tabs.push(["archive","Archive"]);
   return `<div style="display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;">` +
     tabs.map(([id,label]) => {
@@ -5243,6 +5248,313 @@ function renderArchiveTable() {
         <tbody>${bodyRows}</tbody>
       </table>
     </div>`;
+}
+
+// ── RECURRING TASKS ────────────────────────────────────────────────────────────
+function rowsToRecurring(rows) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex:    i + 2,
+    recurringId: r[0] || "",
+    title:       r[1] || "",
+    assignedTo:  r[2] || "",
+    frequency:   r[3] || "Weekly",
+    schedule:    r[4] || "",
+    priority:    r[5] || "Medium",
+    leadDays:    parseInt(r[6]) || 0,
+    active:      String(r[7]).toUpperCase() === "Y",
+    notes:       r[8] || ""
+  }));
+}
+
+function nextRecurringId(items) {
+  const nums = items.map(r => parseInt((r.recurringId||"").replace("REC-",""),10)).filter(n=>!isNaN(n));
+  return "REC-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3,"0");
+}
+
+async function loadRecurring() {
+  const cached = _sGet(RECURRING_CACHE_KEY);
+  if (cached) { _recurring = cached; _recurringLoaded = true; }
+  try {
+    const rows = await readSheet(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME);
+    _recurring = rowsToRecurring(rows);
+    _sSet(RECURRING_CACHE_KEY, _recurring);
+    _recurringLoaded = true;
+    renderRecurring();
+  } catch(e) {
+    _recurringLoaded = true;
+    renderRecurring();
+  }
+}
+
+function renderRecurring() {
+  const shell = document.getElementById("app");
+  shell.innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="recurring-main"></div>`);
+  const el = document.getElementById("recurring-main");
+
+  if (!_recurringLoaded) {
+    el.innerHTML = `<div class="spinner"></div>`;
+    loadRecurring();
+    return;
+  }
+
+  const memberNames = (SESSION.memberRows || []).map(r => r[0]);
+
+  const freqBadge = f => {
+    const map = { Daily:"background:#ede9fe;color:#5b21b6", Weekly:"background:#dbeafe;color:#1e40af", Monthly:"background:#fef9c3;color:#854d0e" };
+    return `<span style="font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap;${map[f]||""}">${f}</span>`;
+  };
+
+  const scheduleLabel = r => {
+    if (r.frequency === "Daily")   return `<span style="font-size:12px;color:#9ca3af;">Every day</span>`;
+    if (r.frequency === "Weekly")  return `<span style="font-size:12px;color:#374151;">Every ${r.schedule}</span>`;
+    if (r.frequency === "Monthly") return `<span style="font-size:12px;color:#374151;">Day ${r.schedule} of month</span>`;
+    return "";
+  };
+
+  const rows = _recurring.map(r => `
+    <tr style="border-bottom:1px solid #f0fdf4;">
+      <td style="padding:10px 12px;max-width:220px;font-weight:500;color:#111827;">${escHtml(r.title)}</td>
+      <td style="padding:10px 12px;white-space:nowrap;font-size:13px;color:#374151;">${escHtml(r.assignedTo)}</td>
+      <td style="padding:10px 12px;">${freqBadge(r.frequency)}</td>
+      <td style="padding:10px 12px;">${scheduleLabel(r)}</td>
+      <td style="padding:10px 12px;">${priorityBadge(r.priority)}</td>
+      <td style="padding:10px 12px;text-align:center;font-size:13px;color:#6b7280;">${r.leadDays === 0 ? "Same day" : r.leadDays + "d ahead"}</td>
+      <td style="padding:10px 12px;text-align:center;">
+        <button onclick="toggleRecurringActive('${escHtml(r.recurringId)}')"
+          style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;border:none;cursor:pointer;
+            background:${r.active?"#dcfce7":"#f1f5f9"};color:${r.active?"#166534":"#6b7280"};">
+          ${r.active ? "Active" : "Paused"}
+        </button>
+      </td>
+      <td style="padding:10px 12px;white-space:nowrap;">
+        <button onclick="openRecurringModal('${escHtml(r.recurringId)}')" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;cursor:pointer;">Edit</button>
+        <button onclick="deleteRecurring('${escHtml(r.recurringId)}')" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;border:none;cursor:pointer;margin-left:6px;">Del</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="8" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No recurring tasks yet. Click + Add Template to create one.</td></tr>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#1b4332;">Recurring Tasks</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px;">Templates that auto-generate tasks on a schedule via Apps Script daily trigger</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="spawnRecurringNow()" style="background:#fff;color:#1b4332;border:1.5px solid #d1fae5;font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer;">▶ Run Now</button>
+        <button onclick="openRecurringModal(null)" style="background:#1b4332;color:#fff;font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;">+ Add Template</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table style="font-size:13px;">
+        <thead><tr style="background:#f0fdf4;">
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Title</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Assigned To</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Frequency</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Schedule</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Priority</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Lead Time</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Status</th>
+          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;">Actions</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function openRecurringModal(recurringId) {
+  const existing = recurringId ? _recurring.find(r => r.recurringId === recurringId) : null;
+  const memberNames = (SESSION.memberRows || []).map(r => r[0]);
+  const isEdit = !!existing;
+
+  const freqOpts = ["Daily","Weekly","Monthly"].map(f =>
+    `<option value="${f}" ${(existing?.frequency||"Weekly")===f?"selected":""}>${f}</option>`).join("");
+
+  const dayOpts = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d =>
+    `<option value="${d}" ${(existing?.schedule||"Monday")===d?"selected":""}>${d}</option>`).join("");
+
+  const prioOpts = ["High","Medium","Low"].map(p =>
+    `<option value="${p}" ${(existing?.priority||"Medium")===p?"selected":""}>${p}</option>`).join("");
+
+  const memberOpts = memberNames.map(n =>
+    `<option value="${n}" ${existing?.assignedTo===n?"selected":""}>${n}</option>`).join("");
+
+  const freq = existing?.frequency || "Weekly";
+  const weeklyVis  = freq === "Weekly"  ? "" : "display:none;";
+  const monthlyVis = freq === "Monthly" ? "" : "display:none;";
+
+  document.getElementById("app").insertAdjacentHTML("beforeend", `
+    <div id="recurring-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;" onclick="if(event.target===this)closeRecurringModal()">
+      <div style="background:#fff;border-radius:16px;padding:28px 28px 24px;width:100%;max-width:460px;box-shadow:0 8px 40px rgba(0,0,0,0.18);max-height:90vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:700;color:#1b4332;margin-bottom:20px;">${isEdit?"Edit":"Add"} Recurring Template</div>
+
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Title</label>
+        <input id="rec-title" value="${escHtml(existing?.title||"")}" placeholder="e.g. Submit weekly status report"
+          style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:14px;outline:none;" />
+
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Assigned To</label>
+        <select id="rec-assignedto" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;margin-bottom:14px;outline:none;background:#fff;">
+          <option value="">— Select member —</option>${memberOpts}
+        </select>
+
+        <div style="display:flex;gap:12px;margin-bottom:14px;">
+          <div style="flex:1;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Frequency</label>
+            <select id="rec-freq" onchange="recFreqChange()" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;background:#fff;">
+              ${freqOpts}
+            </select>
+          </div>
+          <div style="flex:1;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Priority</label>
+            <select id="rec-priority" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;background:#fff;">
+              ${prioOpts}
+            </select>
+          </div>
+        </div>
+
+        <div id="rec-weekly-row" style="${weeklyVis}margin-bottom:14px;">
+          <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Day of Week</label>
+          <select id="rec-day" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;background:#fff;">${dayOpts}</select>
+        </div>
+
+        <div id="rec-monthly-row" style="${monthlyVis}margin-bottom:14px;">
+          <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Day of Month (1–28)</label>
+          <input id="rec-daynum" type="number" min="1" max="28" value="${freq==="Monthly"?(existing?.schedule||"1"):"1"}"
+            style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;" />
+        </div>
+
+        <div style="display:flex;gap:12px;margin-bottom:14px;">
+          <div style="flex:1;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Lead Time (days)</label>
+            <input id="rec-lead" type="number" min="0" max="30" value="${existing?.leadDays??0}"
+              style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;" />
+            <div style="font-size:10px;color:#9ca3af;margin-top:3px;">0 = spawn on due date</div>
+          </div>
+          <div style="flex:1;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Active</label>
+            <select id="rec-active" style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;outline:none;background:#fff;">
+              <option value="Y" ${(existing?.active!==false)?"selected":""}>Yes — spawn tasks</option>
+              <option value="N" ${existing?.active===false?"selected":""}>No — paused</option>
+            </select>
+          </div>
+        </div>
+
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Notes (optional)</label>
+        <textarea id="rec-notes" rows="2" placeholder="Any context for the spawned task…"
+          style="width:100%;padding:8px 10px;border-radius:7px;border:1.5px solid #d1fae5;font-size:13px;resize:vertical;outline:none;margin-bottom:20px;">${escHtml(existing?.notes||"")}</textarea>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button onclick="closeRecurringModal()" style="padding:9px 20px;border-radius:8px;border:1.5px solid #d1fae5;background:#fff;color:#374151;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+          <button onclick="saveRecurring('${recurringId||""}')" style="padding:9px 20px;border-radius:8px;border:none;background:#1b4332;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">${isEdit?"Save Changes":"Add Template"}</button>
+        </div>
+      </div>
+    </div>`);
+}
+
+function recFreqChange() {
+  const f = document.getElementById("rec-freq").value;
+  document.getElementById("rec-weekly-row").style.display  = f === "Weekly"  ? "" : "none";
+  document.getElementById("rec-monthly-row").style.display = f === "Monthly" ? "" : "none";
+}
+
+function closeRecurringModal() {
+  const m = document.getElementById("recurring-modal");
+  if (m) m.remove();
+}
+
+async function saveRecurring(recurringId) {
+  const title      = document.getElementById("rec-title").value.trim();
+  const assignedTo = document.getElementById("rec-assignedto").value;
+  const freq       = document.getElementById("rec-freq").value;
+  const priority   = document.getElementById("rec-priority").value;
+  const lead       = parseInt(document.getElementById("rec-lead").value) || 0;
+  const active     = document.getElementById("rec-active").value;
+  const notes      = document.getElementById("rec-notes").value.trim();
+
+  let schedule = "";
+  if (freq === "Weekly")  schedule = document.getElementById("rec-day").value;
+  if (freq === "Monthly") {
+    const n = parseInt(document.getElementById("rec-daynum").value);
+    schedule = String(Math.min(28, Math.max(1, n || 1)));
+  }
+
+  if (!title)      { showToast("Title is required"); return; }
+  if (!assignedTo) { showToast("Please select a team member"); return; }
+  if (freq === "Weekly"  && !schedule) { showToast("Select a day of week"); return; }
+  if (freq === "Monthly" && !schedule) { showToast("Enter a day of month"); return; }
+
+  const isEdit = !!recurringId;
+  const btn = document.querySelector("#recurring-modal button[onclick*='saveRecurring']");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+
+  try {
+    if (isEdit) {
+      const item = _recurring.find(r => r.recurringId === recurringId);
+      if (!item) return;
+      const vals = [item.recurringId, title, assignedTo, freq, schedule, priority, lead, active, notes];
+      await updateRow(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME, item.rowIndex, vals);
+      Object.assign(item, { title, assignedTo, frequency: freq, schedule, priority, leadDays: lead, active: active==="Y", notes });
+      _sSet(RECURRING_CACHE_KEY, _recurring);
+      showToast("Template updated");
+    } else {
+      const newId = nextRecurringId(_recurring);
+      const vals  = [newId, title, assignedTo, freq, schedule, priority, lead, active, notes];
+      await appendRow(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME, vals);
+      const rows  = await readSheet(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME);
+      _recurring  = rowsToRecurring(rows);
+      _sSet(RECURRING_CACHE_KEY, _recurring);
+      showToast("Template added");
+    }
+    closeRecurringModal();
+    renderRecurring();
+  } catch(e) {
+    showToast("Error: " + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = isEdit ? "Save Changes" : "Add Template"; }
+  }
+}
+
+async function deleteRecurring(recurringId) {
+  const item = _recurring.find(r => r.recurringId === recurringId);
+  if (!item) return;
+  if (!confirm(`Delete recurring template "${item.title}"? This will NOT delete already-spawned tasks.`)) return;
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME, item.rowIndex);
+    _recurring = _recurring.filter(r => r.recurringId !== recurringId);
+    _sSet(RECURRING_CACHE_KEY, _recurring);
+    renderRecurring();
+    showToast("Template deleted");
+  } catch(e) { showToast("Error: " + e.message); }
+}
+
+async function toggleRecurringActive(recurringId) {
+  const item = _recurring.find(r => r.recurringId === recurringId);
+  if (!item) return;
+  const newActive = !item.active;
+  try {
+    const vals = [item.recurringId, item.title, item.assignedTo, item.frequency, item.schedule, item.priority, item.leadDays, newActive?"Y":"N", item.notes];
+    await updateRow(CALENDAR_SHEET_ID, RECURRING_SHEET_NAME, item.rowIndex, vals);
+    item.active = newActive;
+    _sSet(RECURRING_CACHE_KEY, _recurring);
+    renderRecurring();
+    showToast(newActive ? "Template activated" : "Template paused");
+  } catch(e) { showToast("Error: " + e.message); }
+}
+
+async function spawnRecurringNow() {
+  const btn = document.querySelector("#recurring-main button[onclick='spawnRecurringNow()']");
+  if (btn) { btn.disabled = true; btn.textContent = "Running…"; }
+  try {
+    const result = await proxyCall({ action: "spawnRecurring", sheetId: CALENDAR_SHEET_ID });
+    const count = result?.spawned ?? 0;
+    showToast(count > 0 ? `${count} task${count>1?"s":""} spawned` : "No tasks due to spawn today");
+    if (count > 0) {
+      _sDel("tmgr_tasks");
+      loadAllTasks();
+    }
+  } catch(e) {
+    showToast("Error: " + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "▶ Run Now"; }
+  }
 }
 
 // ── BOOT ───────────────────────────────────────────────────────────────────────
