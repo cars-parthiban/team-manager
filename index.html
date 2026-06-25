@@ -1844,6 +1844,7 @@ function renderYearView() {
   const todayStr = `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,"0")}-${String(td.getDate()).padStart(2,"0")}`;
   const yStart  = `${year}-01-01`, yEnd = `${year}-12-31`;
   const yEvts   = _filteredCalEvents().filter(e => e.endDate >= yStart && e.startDate <= yEnd);
+  const ceForAbsYr = _companyEventsForAbsenceCal();
 
   const allNames = yEvts.length
     ? [...new Set(yEvts.map(e => e.memberName))].filter(Boolean)
@@ -1875,20 +1876,26 @@ function renderYearView() {
         if (!day) return `<div style="height:18px;"></div>`;
         const ds      = `${year}-${String(mn).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
         const isToday = ds === todayStr;
-        const dayEvts = mEvts.filter(e => e.startDate <= ds && e.endDate >= ds);
-        const hasPTO  = dayEvts.length > 0;
+        const dayEvts  = mEvts.filter(e => e.startDate <= ds && e.endDate >= ds);
+        const ceDayEvts = ceForAbsYr.filter(e => e.startDate <= ds && e.endDate >= ds);
+        const hasPTO   = dayEvts.length > 0;
+        const hasCE    = ceDayEvts.length > 0;
 
         let cellBg = "transparent", numColor = "#374151", numBg = "transparent";
         if (isToday)     { numBg = "#1b4332"; numColor = "#fff"; }
         else if (hasPTO) { cellBg = memberColor(dayEvts[0].memberName) + "28"; numColor = "#111"; }
+        else if (hasCE)  { cellBg = (ceDayEvts[0].type==="Birthday"?"#ec4899":"#f59e0b") + "22"; numColor = "#111"; }
 
-        const dots = hasPTO
+        const ceDots = ceDayEvts.slice(0,2).map(e =>
+          `<div style="width:3px;height:3px;border-radius:50%;background:${e.type==="Birthday"?"#ec4899":"#f59e0b"};"></div>`).join("");
+        const dots = (hasPTO || hasCE)
           ? `<div style="display:flex;gap:1px;justify-content:center;">${
               dayEvts.slice(0,3).map(e => `<div style="width:3px;height:3px;border-radius:50%;background:${memberColor(e.memberName)};"></div>`).join("")
-            }</div>`
+            }${ceDots}</div>`
           : "";
 
-        const tip = hasPTO ? ` title="${dayEvts.map(e=>e.memberName.split(' ')[0]).join(', ')}"` : "";
+        const tipParts = [...dayEvts.map(e=>e.memberName.split(' ')[0]), ...ceDayEvts.map(e=>e.title)];
+        const tip = tipParts.length ? ` title="${tipParts.join(', ')}"` : "";
         return `<div${tip} style="height:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${cellBg};border-radius:2px;">
           <div style="font-size:8px;font-weight:${isToday?700:400};color:${numColor};background:${numBg};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
           ${dots}
@@ -4868,6 +4875,7 @@ function renderTEventsYearView() {
   const showAllY     = _activeTeamCal === "all";
   const memberTeamsY = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const yEvts = _teamEvents.filter(e => (showAllY || e.team===_activeTeamCal) && (!memberTeamsY || memberTeamsY.has(e.team)) && e.endDate>=`${year}-01-01` && e.startDate<=`${year}-12-31`);
+  const ceForBizYr = _companyEventsForBusinessCal();
 
   const miniMonths = MONTHS.map((mName,mi) => {
     const mn  = mi+1;
@@ -4887,16 +4895,23 @@ function renderTEventsYearView() {
           if (!day) return `<div style="height:18px;"></div>`;
           const ds = `${year}-${String(mn).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
           const isToday = ds===todayStr;
-          const dayEvts = mEvts.filter(e=>e.startDate<=ds&&e.endDate>=ds);
-          const hasPTO  = dayEvts.length>0;
+          const dayEvts   = mEvts.filter(e=>e.startDate<=ds&&e.endDate>=ds);
+          const ceBizDay  = ceForBizYr.filter(e=>e.startDate<=ds&&e.endDate>=ds);
+          const hasPTO    = dayEvts.length>0;
+          const hasCEBiz  = ceBizDay.length>0;
           const _evtColor = e => showAllY ? memberColor(e.team) : memberColor(e.title);
-          const bg = hasPTO ? _evtColor(dayEvts[0])+"28" : "transparent";
+          let bg = "transparent";
+          if (hasPTO) bg = _evtColor(dayEvts[0])+"28";
+          else if (hasCEBiz) bg = (ceBizDay[0].type==="Birthday"?"#ec4899":"#f59e0b")+"22";
           const numBg  = isToday ? "#1b4332" : "transparent";
           const numCol = isToday ? "#fff" : "#374151";
-          const dots = hasPTO ? `<div style="display:flex;gap:1px;justify-content:center;">${
+          const ceBizDots = ceBizDay.slice(0,2).map(e=>
+            `<div style="width:3px;height:3px;border-radius:50%;background:${e.type==="Birthday"?"#ec4899":"#f59e0b"};"></div>`).join("");
+          const dots = (hasPTO||hasCEBiz) ? `<div style="display:flex;gap:1px;justify-content:center;">${
             dayEvts.slice(0,3).map(e=>`<div style="width:3px;height:3px;border-radius:50%;background:${_evtColor(e)};"></div>`).join("")
-          }</div>` : "";
-          const tip = hasPTO ? ` title="${dayEvts.map(e=>e.title).join(", ")}"` : "";
+          }${ceBizDots}</div>` : "";
+          const tipParts = [...dayEvts.map(e=>e.title), ...ceBizDay.map(e=>e.title)];
+          const tip = tipParts.length ? ` title="${tipParts.join(", ")}"` : "";
           return `<div${tip} style="height:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${bg};border-radius:2px;">
             <div style="font-size:8px;font-weight:${isToday?700:400};color:${numCol};background:${numBg};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
             ${dots}
