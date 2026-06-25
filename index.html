@@ -48,6 +48,7 @@ const ARCHIVE_SHEET_NAME        = "Archive";
 const CONTACTS_SHEET_NAME       = "Contacts";
 const COMMENTS_SHEET_NAME       = "Comments";
 const RECURRING_SHEET_NAME      = "Recurring_Tasks";
+const COMPANY_EVENTS_SHEET_NAME = "Company_Events";
 
 // ── PROXY HELPERS ──────────────────────────────────────────────────────────────
 async function proxyCall(params) {
@@ -208,6 +209,8 @@ let _obStatusSortCol = "", _obStatusSortDir = "asc";
 let _teamEvents = [], _teamEventsLoaded = false;
 let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth = new Date().getMonth();
 let _teamCalView = "month", _teamEventModal = null;
+let _companyEvents = [], _companyEventsLoaded = false;
+let _companyEventModal = null, _companyEventTypeFilter = "all";
 
 function render() {
   if (!SESSION) renderLogin();
@@ -845,7 +848,8 @@ function renderManager() {
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
   if (_activeTab === "onboarding") { renderOnboarding();   return; }
-  if (_activeTab === "recurring")  { renderRecurring();    return; }
+  if (_activeTab === "recurring")    { renderRecurring();      return; }
+  if (_activeTab === "company_events") { renderCompanyEvents();  return; }
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
   if (_allTasks.length > 0) {
     renderManagerTable();
@@ -1393,6 +1397,7 @@ function tabBarHTML() {
   if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
   if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
   if (SESSION.role === "Manager") tabs.push(["recurring","Recurring"]);
+  if (SESSION.role === "Manager") tabs.push(["company_events","Events"]);
   tabs.push(["archive","Archive"]);
   return `<div style="overflow-x:auto;margin-bottom:24px;"><div style="display:flex;gap:4px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;min-width:100%;">` +
     tabs.map(([id,label]) => {
@@ -1535,6 +1540,7 @@ function _calTeamSwitcherHTML() {
 function renderCalendar() {
   const role = SESSION.role;
   document.getElementById("app").innerHTML = shellHTML(role, SESSION.name, tabBarHTML() + `<div id="cal-main"></div>`);
+  if (!_companyEventsLoaded) _ensureCompanyEvents();
   if (_calLoaded) {
     _renderCalView();
     _bgRefreshCal();
@@ -1606,6 +1612,7 @@ function renderCalendarGrid() {
   const mStart    = `${year}-${String(month+1).padStart(2,"0")}-01`;
   const mEnd      = `${year}-${String(month+1).padStart(2,"0")}-${String(daysInMonth).padStart(2,"0")}`;
   const monthEvts = _filteredCalEvents().filter(e => e.endDate >= mStart && e.startDate <= mEnd);
+  const ceForAbsence = _companyEventsForAbsenceCal();
 
   const cells = Array(firstDay).fill(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
@@ -1630,13 +1637,20 @@ function renderCalendarGrid() {
           title="${e.memberName}: ${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)}${e.notes ? ' | '+e.notes : ''}"
           style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>`;
       }).join("");
+      const ceDayEvts = ceForAbsence.filter(e => e.startDate <= ds && e.endDate >= ds);
+      const ceChips = ceDayEvts.map(e => {
+        const bg = e.type === "Birthday" ? "#ec4899" : "#f59e0b";
+        const icon = e.type === "Birthday" ? "🎂" : "🎉";
+        return `<div onclick="event.stopPropagation()" title="${escHtml(e.title)} (${e.type})"
+          style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${icon} ${escHtml(e.title)}</div>`;
+      }).join("");
       const bgNorm = isToday ? "#f0fdf4" : "#fff";
       const bgHov  = isToday ? "#d1fae5" : "#f9fafb";
       return `<div onclick="openCalAddModal('${ds}')"
         style="min-height:68px;padding:3px 4px;border-right:1px solid #f3f4f6;background:${bgNorm};cursor:pointer;"
         onmouseover="this.style.background='${bgHov}'" onmouseout="this.style.background='${bgNorm}'">
         <div style="font-size:11px;font-weight:${isToday?700:500};width:19px;height:19px;display:flex;align-items:center;justify-content:center;border-radius:50%;${isToday?"background:#1b4332;color:#fff;":"color:#374151;"}">${day}</div>
-        ${chips}
+        ${ceChips}${chips}
       </div>`;
     }).join("");
     rowsHTML.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #f3f4f6;">${rowCells}</div>`);
@@ -1764,9 +1778,31 @@ function renderListView() {
     return memberHeader + evtRows;
   }).join("");
 
+  const ceAbsYearEvts = _companyEventsForAbsenceCal().filter(e => e.endDate >= yStart && e.startDate <= yEnd)
+    .sort((a,b) => a.startDate.localeCompare(b.startDate));
+  const ceAbsSection = ceAbsYearEvts.length ? `
+    <div style="background:#fff;border-radius:16px;border:1px solid #fde68a;overflow:hidden;margin-bottom:16px;">
+      <div style="padding:8px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;font-weight:700;color:#92400e;">Company Events — ${year}</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <tbody>${ceAbsYearEvts.map((e,i) => {
+            const bg = e.type==="Birthday"?"#fce7f3":"#fef3c7";
+            const icon = e.type==="Birthday"?"🎂":"🎉";
+            return `<tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f3f4f6;">
+              <td style="padding:8px 14px;font-size:12px;font-weight:600;">
+                <span style="background:${bg};padding:2px 8px;border-radius:10px;">${icon} ${escHtml(e.title)}</span>
+              </td>
+              <td style="padding:8px 14px;font-size:12px;color:#374151;white-space:nowrap;">${formatDueDate(e.startDate)}${e.startDate!==e.endDate?" – "+formatDueDate(e.endDate):""}</td>
+              <td style="padding:8px 14px;font-size:12px;color:#9ca3af;">${escHtml(e.notes)||"—"}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+    </div>` : "";
+
   const el = document.getElementById("cal-main");
   if (!el) return;
-  el.innerHTML = _calTeamSwitcherHTML() + `
+  el.innerHTML = _calTeamSwitcherHTML() + ceAbsSection + `
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
         <button onclick="calPrevYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;flex-shrink:0;">&#8249;</button>
@@ -4525,6 +4561,7 @@ function nextTeamEventId(events) {
 function renderTeamEvents() {
   document.getElementById("app").innerHTML = shellHTML(SESSION.role, SESSION.name,
     tabBarHTML() + `<div id="events-main"></div>`);
+  if (!_companyEventsLoaded) _ensureCompanyEvents();
   const availTeams = SESSION.role === "Manager" ? (SESSION.teams||[]) : (SESSION.teams||[]);
   if (!_activeTeamCal) _activeTeamCal = (SESSION.role === "Manager" || availTeams.length > 1) ? "all" : (availTeams[0] || "");
   if (_teamEventsLoaded) {
@@ -4679,9 +4716,31 @@ function renderTEventsListView() {
     return teamHeader + evtRows;
   }).join("");
 
+  const ceBizYearEvts = _companyEventsForBusinessCal().filter(e => e.endDate >= yStart && e.startDate <= yEnd)
+    .sort((a,b) => a.startDate.localeCompare(b.startDate));
+  const ceBizSection = ceBizYearEvts.length ? `
+    <div style="background:#fff;border-radius:16px;border:1px solid #fde68a;overflow:hidden;margin-bottom:16px;">
+      <div style="padding:8px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;font-weight:700;color:#92400e;">Company Events — ${year}</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <tbody>${ceBizYearEvts.map((e,i) => {
+            const bg = e.type==="Birthday"?"#fce7f3":"#fef3c7";
+            const icon = e.type==="Birthday"?"🎂":"🎉";
+            return `<tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f3f4f6;">
+              <td style="padding:8px 14px;font-size:12px;font-weight:600;">
+                <span style="background:${bg};padding:2px 8px;border-radius:10px;">${icon} ${escHtml(e.title)}</span>
+              </td>
+              <td style="padding:8px 14px;font-size:12px;color:#374151;white-space:nowrap;">${formatDueDate(e.startDate)}${e.startDate!==e.endDate?" – "+formatDueDate(e.endDate):""}</td>
+              <td style="padding:8px 14px;font-size:12px;color:#9ca3af;">${escHtml(e.notes)||"—"}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+    </div>` : "";
+
   const el = document.getElementById("events-main");
   if (!el) return;
-  el.innerHTML = _tEventsTeamSwitcher(availTeams) + `
+  el.innerHTML = _tEventsTeamSwitcher(availTeams) + ceBizSection + `
     <div style="background:#fff;border-radius:16px;border:1px solid #d1fae5;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #d1fae5;gap:6px;">
         <button onclick="teamCalPrevYear()" style="background:#f0fdf4;border:none;color:#1b4332;border-radius:8px;padding:4px 12px;font-size:18px;font-weight:700;cursor:pointer;line-height:1;flex-shrink:0;">&#8249;</button>
@@ -4729,6 +4788,7 @@ function renderTEventsGrid() {
   const showAll     = _activeTeamCal === "all";
   const memberTeams = SESSION.role !== "Manager" ? new Set(SESSION.teams||[]) : null;
   const mEvts    = _teamEvents.filter(e => (showAll || e.team === _activeTeamCal) && (!memberTeams || memberTeams.has(e.team)) && e.endDate >= mStart && e.startDate <= mEnd);
+  const ceForBusiness = _companyEventsForBusinessCal();
 
   const cells = Array(firstDay).fill(null);
   for (let d=1; d<=dim; d++) cells.push(d);
@@ -4750,12 +4810,19 @@ function renderTEventsGrid() {
           title="${e.title}${e.desc?' | '+e.desc:''} (${e.team} · ${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)})"
           style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>`;
       }).join("");
+      const ceBizDayEvts = ceForBusiness.filter(e => e.startDate<=ds && e.endDate>=ds);
+      const ceBizChips = ceBizDayEvts.map(e => {
+        const bg = e.type === "Birthday" ? "#ec4899" : "#f59e0b";
+        const icon = e.type === "Birthday" ? "🎂" : "🎉";
+        return `<div onclick="event.stopPropagation()" title="${escHtml(e.title)} (${e.type})"
+          style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${icon} ${escHtml(e.title)}</div>`;
+      }).join("");
       const bgN=isToday?"#f0fdf4":"#fff", bgH=isToday?"#d1fae5":"#f9fafb";
       return `<div onclick="openTeamEventAddModal('${ds}')"
         style="min-height:80px;padding:3px 4px;border-right:1px solid #f3f4f6;background:${bgN};cursor:pointer;"
         onmouseover="this.style.background='${bgH}'" onmouseout="this.style.background='${bgN}'">
         <div style="font-size:11px;font-weight:${isToday?700:500};width:19px;height:19px;display:flex;align-items:center;justify-content:center;border-radius:50%;${isToday?"background:#1b4332;color:#fff;":"color:#374151;"}">${day}</div>
-        ${chips}
+        ${ceBizChips}${chips}
       </div>`;
     }).join("");
     rowsHTML.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid #f3f4f6;">${rowCells}</div>`);
@@ -4972,6 +5039,335 @@ async function doDeleteTeamEvent(rowIndex) {
   try {
     await deleteRowProxy(CALENDAR_SHEET_ID, TEAM_EVENTS_SHEET_NAME, rowIndex);
     await reloadTeamEvents();
+    showToast("Deleted");
+  } catch(e) { alert("Delete failed: " + e.message); }
+}
+
+// ── COMPANY EVENTS ────────────────────────────────────────────────────────────
+function rowsToCompanyEvents(rows) {
+  if (rows.length < 2) return [];
+  return rows.slice(1).map((r, i) => ({
+    rowIndex: i + 2,
+    eventId:  r[0] || "",
+    type:     r[1] || "Holiday",
+    title:    r[2] || "",
+    startDate: normDate(r[3]),
+    endDate:   normDate(r[4]),
+    absenceCalTeams:  r[5] || "",
+    businessCalTeams: r[6] || "",
+    notes: r[7] || ""
+  })).filter(e => e.title && e.startDate && e.endDate);
+}
+
+function nextCompanyEventId(events) {
+  const nums = events.map(e => parseInt((e.eventId||"").replace("EVT-",""), 10)).filter(n => !isNaN(n));
+  return "EVT-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, "0");
+}
+
+function _companyEventsForAbsenceCal() {
+  if (!_companyEvents.length) return [];
+  const myTeams = new Set(SESSION.teams||[]);
+  const isManager = SESSION.role === "Manager";
+  return _companyEvents.filter(e => {
+    const teams = (e.absenceCalTeams||"").split(",").map(t=>t.trim()).filter(Boolean);
+    if (!teams.length) return false;
+    const isAll = teams.includes("All");
+    if (!isManager && !isAll && ![...myTeams].some(t => teams.includes(t))) return false;
+    if (_calFilterTeam && _calFilterTeam !== "all" && !isAll && !teams.includes(_calFilterTeam)) return false;
+    return true;
+  });
+}
+
+function _companyEventsForBusinessCal() {
+  if (!_companyEvents.length) return [];
+  const myTeams = new Set(SESSION.teams||[]);
+  const isManager = SESSION.role === "Manager";
+  return _companyEvents.filter(e => {
+    const teams = (e.businessCalTeams||"").split(",").map(t=>t.trim()).filter(Boolean);
+    if (!teams.length) return false;
+    const isAll = teams.includes("All");
+    if (!isManager && !isAll && ![...myTeams].some(t => teams.includes(t))) return false;
+    if (_activeTeamCal && _activeTeamCal !== "all" && !isAll && !teams.includes(_activeTeamCal)) return false;
+    return true;
+  });
+}
+
+async function _ensureCompanyEvents() {
+  if (_companyEventsLoaded) return;
+  try {
+    const cached = _sGet("tmgr_cevents");
+    if (cached) { _companyEvents = cached; _companyEventsLoaded = true; render(); return; }
+    const rows = await readSheet(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME);
+    const fresh = rowsToCompanyEvents(rows);
+    _sSet("tmgr_cevents", fresh);
+    _companyEvents = fresh;
+    _companyEventsLoaded = true;
+    render();
+  } catch { _companyEventsLoaded = true; }
+}
+
+function renderCompanyEvents() {
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="company-events-main"></div>`);
+  if (_companyEventsLoaded) {
+    _renderCompanyEventsView();
+    _bgRefreshCompanyEvents();
+  } else {
+    document.getElementById("company-events-main").innerHTML = `<div class="spinner"></div>`;
+    loadCompanyEvents();
+  }
+}
+
+async function loadCompanyEvents() {
+  const cached = _sGet("tmgr_cevents");
+  if (cached) { _companyEvents = cached; _companyEventsLoaded = true; _renderCompanyEventsView(); }
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME);
+    const fresh = rowsToCompanyEvents(rows);
+    _sSet("tmgr_cevents", fresh);
+    _companyEventsLoaded = true;
+    if (JSON.stringify(fresh) !== JSON.stringify(_companyEvents)) {
+      _companyEvents = fresh;
+      if (_activeTab === "company_events") _renderCompanyEventsView();
+    }
+  } catch(e) {
+    _companyEventsLoaded = true;
+    if (!cached) {
+      const el = document.getElementById("company-events-main");
+      if (el) el.innerHTML = `<div style="color:#dc2626;padding:16px;">Failed to load events: ${e.message}</div>`;
+    }
+  }
+}
+
+async function reloadCompanyEvents() {
+  const rows = await readSheet(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME);
+  _companyEvents = rowsToCompanyEvents(rows);
+  _sSet("tmgr_cevents", _companyEvents);
+  _companyEventsLoaded = true;
+  _renderCompanyEventsView();
+}
+
+async function _bgRefreshCompanyEvents() {
+  try {
+    const rows  = await readSheet(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME);
+    const fresh = rowsToCompanyEvents(rows);
+    _sSet("tmgr_cevents", fresh);
+    if (JSON.stringify(fresh) !== JSON.stringify(_companyEvents)) {
+      _companyEvents = fresh;
+      if (_activeTab === "company_events") _renderCompanyEventsView();
+    }
+  } catch {}
+}
+
+function _setCETypeFilter(f) { _companyEventTypeFilter = f; _renderCompanyEventsView(); }
+
+function _renderCompanyEventsView() {
+  const el = document.getElementById("company-events-main");
+  if (!el) return;
+  const filtered = _companyEventTypeFilter === "all" ? _companyEvents
+    : _companyEvents.filter(e => e.type === _companyEventTypeFilter);
+
+  const typeFilterHTML = `<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+    ${["all","Holiday","Birthday"].map(t => {
+      const active = _companyEventTypeFilter === t;
+      const label  = t === "all" ? "All Types" : t;
+      return `<button onclick="_setCETypeFilter('${t}')" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;border:${active?"none":"1.5px solid #d1fae5"};cursor:pointer;background:${active?"#1b4332":"#fff"};color:${active?"#fff":"#6b7280"};">${label}</button>`;
+    }).join("")}
+  </div>`;
+
+  const typeStyle = {
+    Holiday:  { bg:"#fef3c7", color:"#92400e", border:"#fde68a", icon:"🎉" },
+    Birthday: { bg:"#fce7f3", color:"#9d174d", border:"#fbcfe8", icon:"🎂" }
+  };
+
+  const formatTeams = (teams) => {
+    if (!teams) return `<span style="color:#9ca3af;">—</span>`;
+    const arr = teams.split(",").map(t=>t.trim()).filter(Boolean);
+    if (!arr.length) return `<span style="color:#9ca3af;">—</span>`;
+    if (arr.includes("All")) return `<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">All Teams</span>`;
+    return arr.map(t=>`<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;margin-right:3px;">${escHtml(t)}</span>`).join("");
+  };
+
+  const sorted = [...filtered].sort((a,b) => a.startDate.localeCompare(b.startDate));
+  const rows = sorted.length ? sorted.map((e, i) => {
+    const s = typeStyle[e.type] || { bg:"#f1f5f9", color:"#475569", border:"#e2e8f0", icon:"📅" };
+    return `<tr style="background:${i%2===0?"#fff":"#fafafa"};border-bottom:1px solid #f3f4f6;">
+      <td style="padding:10px 14px;">
+        <span style="display:inline-flex;align-items:center;gap:4px;background:${s.bg};color:${s.color};border:1px solid ${s.border};padding:3px 9px;border-radius:12px;font-size:11px;font-weight:600;">${s.icon} ${escHtml(e.type)}</span>
+      </td>
+      <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#1b4332;">${escHtml(e.title)}</td>
+      <td style="padding:10px 14px;font-size:12px;color:#374151;white-space:nowrap;">${formatDueDate(e.startDate)}${e.startDate!==e.endDate?" – "+formatDueDate(e.endDate):""}</td>
+      <td style="padding:10px 14px;">${formatTeams(e.absenceCalTeams)}</td>
+      <td style="padding:10px 14px;">${formatTeams(e.businessCalTeams)}</td>
+      <td style="padding:10px 14px;font-size:12px;color:#9ca3af;">${escHtml(e.notes)||"—"}</td>
+      <td style="padding:10px 14px;">
+        <button onclick="openCompanyEventModal('${e.eventId}')" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:none;cursor:pointer;">Edit</button>
+      </td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="7" style="padding:32px;text-align:center;color:#9ca3af;font-size:13px;">No events yet. Click + Add Event to create one.</td></tr>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <div style="font-size:17px;font-weight:700;color:#1b4332;">Company Events</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px;">Holidays &amp; birthdays shown across calendars</div>
+      </div>
+      <button onclick="openCompanyEventModal(null)" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">+ Add Event</button>
+    </div>
+    ${typeFilterHTML}
+    <div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;border:1px solid #d1fae5;overflow:hidden;">
+      <thead>
+        <tr style="background:#f0fdf4;">
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;white-space:nowrap;">Type</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;">Title</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;white-space:nowrap;">Date</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;white-space:nowrap;">Absence Calendar</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;white-space:nowrap;">Business Calendar</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #d1fae5;">Notes</th>
+          <th style="padding:10px 14px;border-bottom:1px solid #d1fae5;"></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>`;
+}
+
+function openCompanyEventModal(eventId) {
+  const e = eventId ? _companyEvents.find(ev => ev.eventId === eventId) : null;
+  _companyEventModal = e ? { mode:"edit", ...e } : {
+    mode:"add", eventId:"", type:"Holiday", title:"", startDate:"", endDate:"",
+    absenceCalTeams:"All", businessCalTeams:"All", notes:""
+  };
+  renderCompanyEventModal();
+}
+
+function renderCompanyEventModal() {
+  const ex = document.getElementById("cevt-modal"); if (ex) ex.remove();
+  const m = _companyEventModal; if (!m) return;
+  const isEdit = m.mode === "edit";
+  const F = "width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid #d1fae5;font-size:13px;box-sizing:border-box;";
+  const allTeams = getTeamNames().length ? getTeamNames() : (SESSION.teams||[]);
+
+  const makeTeamCheckboxes = (fieldId, savedTeams) => {
+    const saved = (savedTeams||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const isAll = saved.includes("All");
+    const allCheck = `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#374151;cursor:pointer;margin-bottom:6px;font-weight:600;">
+      <input type="checkbox" id="${fieldId}-all" ${isAll?"checked":""} onchange="_ceToggleAll('${fieldId}')"/>
+      All Teams
+    </label>`;
+    const teamChecks = allTeams.map(t => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#374151;cursor:pointer;margin-bottom:4px;">
+      <input type="checkbox" class="${fieldId}-team" value="${escHtml(t)}" ${(isAll||saved.includes(t))?"checked":""} ${isAll?"disabled":""}/>
+      ${escHtml(t)}
+    </label>`).join("");
+    return `<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;max-height:130px;overflow-y:auto;">${allCheck}${teamChecks}</div>`;
+  };
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="cevt-modal" onclick="if(event.target===this)closeCompanyEventModal()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:16px;padding:1.5rem 1.75rem;width:100%;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.25);max-height:92vh;overflow-y:auto;">
+        <div style="font-size:15px;font-weight:700;color:#1b4332;margin-bottom:16px;">${isEdit?"Edit":"Add"} Company Event</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Type *</label>
+        <select id="cevt-type" style="${F} margin-bottom:14px;">
+          <option value="Holiday"${m.type==="Holiday"?" selected":""}>🎉 Holiday</option>
+          <option value="Birthday"${m.type==="Birthday"?" selected":""}>🎂 Birthday</option>
+        </select>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Title *</label>
+        <input id="cevt-title" value="${m.title.replace(/"/g,"&quot;")}" placeholder="e.g. Christmas Day, John's Birthday"
+          style="${F} margin-bottom:14px;"/>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Start Date *</label>
+            <input id="cevt-start" type="date" value="${m.startDate}" onchange="cevtStartChanged()" style="${F}"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">End Date *</label>
+            <input id="cevt-end" type="date" value="${m.endDate}" style="${F}"/>
+          </div>
+        </div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Show in Absence Calendar</label>
+        <div style="margin-bottom:14px;">${makeTeamCheckboxes("cevt-absence", m.absenceCalTeams)}</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Show in Business Calendar</label>
+        <div style="margin-bottom:14px;">${makeTeamCheckboxes("cevt-business", m.businessCalTeams)}</div>
+
+        <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;">Notes</label>
+        <input id="cevt-notes" value="${(m.notes||"").replace(/"/g,"&quot;")}" placeholder="Optional"
+          style="${F} margin-bottom:14px;"/>
+
+        <div id="cevt-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${isEdit?`<button onclick="doDeleteCompanyEvent(${m.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid #fca5a5;cursor:pointer;">Delete</button>`:""}
+          <div style="flex:1;"></div>
+          <button onclick="closeCompanyEventModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
+          <button onclick="doSaveCompanyEvent()" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>`);
+  document.getElementById("cevt-title").focus();
+}
+
+function _ceToggleAll(fieldId) {
+  const allCb = document.getElementById(fieldId+"-all");
+  document.querySelectorAll(`.${fieldId}-team`).forEach(cb => {
+    cb.checked = allCb.checked;
+    cb.disabled = allCb.checked;
+  });
+}
+
+function cevtStartChanged() {
+  const s = document.getElementById("cevt-start").value;
+  const e = document.getElementById("cevt-end");
+  if (!e.value || e.value < s) e.value = s;
+}
+
+function closeCompanyEventModal() {
+  _companyEventModal = null;
+  const el = document.getElementById("cevt-modal"); if (el) el.remove();
+}
+
+function _getTeamsFromCheckboxes(fieldId) {
+  const allCb = document.getElementById(fieldId+"-all");
+  if (allCb && allCb.checked) return "All";
+  return [...document.querySelectorAll(`.${fieldId}-team:checked`)].map(cb => cb.value).join(",");
+}
+
+async function doSaveCompanyEvent() {
+  const type     = document.getElementById("cevt-type").value;
+  const title    = document.getElementById("cevt-title").value.trim();
+  const start    = document.getElementById("cevt-start").value;
+  const end      = document.getElementById("cevt-end").value;
+  const absTeams = _getTeamsFromCheckboxes("cevt-absence");
+  const bizTeams = _getTeamsFromCheckboxes("cevt-business");
+  const notes    = document.getElementById("cevt-notes").value.trim();
+  const m        = _companyEventModal;
+  const errEl    = document.getElementById("cevt-error");
+  if (!title) { errEl.textContent = "Title is required."; return; }
+  if (!start || !end) { errEl.textContent = "Start and end dates are required."; return; }
+  if (end < start) { errEl.textContent = "End date cannot be before start date."; return; }
+  try {
+    if (m.mode === "add") {
+      await appendRow(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME, [nextCompanyEventId(_companyEvents), type, title, start, end, absTeams, bizTeams, notes]);
+    } else {
+      await updateRow(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME, m.rowIndex, [m.eventId, type, title, start, end, absTeams, bizTeams, notes]);
+    }
+    closeCompanyEventModal();
+    await reloadCompanyEvents();
+    showToast("Saved ✓");
+  } catch(e) { errEl.textContent = "Save failed: " + e.message; }
+}
+
+async function doDeleteCompanyEvent(rowIndex) {
+  if (!confirm("Delete this event?")) return;
+  closeCompanyEventModal();
+  try {
+    await deleteRowProxy(CALENDAR_SHEET_ID, COMPANY_EVENTS_SHEET_NAME, rowIndex);
+    await reloadCompanyEvents();
     showToast("Deleted");
   } catch(e) { alert("Delete failed: " + e.message); }
 }
