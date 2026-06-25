@@ -1894,10 +1894,12 @@ function renderYearView() {
             }${ceDots}</div>`
           : "";
 
+        const isHoliday = ceDayEvts.some(e => e.type === "Holiday");
+        const numBorder = (!isToday && isHoliday) ? "1.5px solid #f59e0b" : "none";
         const tipParts = [...dayEvts.map(e=>e.memberName.split(' ')[0]), ...ceDayEvts.map(e=>e.title)];
         const tip = tipParts.length ? ` title="${tipParts.join(', ')}"` : "";
         return `<div${tip} style="height:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${cellBg};border-radius:2px;">
-          <div style="font-size:8px;font-weight:${isToday?700:400};color:${numColor};background:${numBg};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
+          <div style="font-size:8px;font-weight:${isToday?700:400};color:${numColor};background:${numBg};border:${numBorder};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
           ${dots}
         </div>`;
       }).join("");
@@ -4910,10 +4912,12 @@ function renderTEventsYearView() {
           const dots = (hasPTO||hasCEBiz) ? `<div style="display:flex;gap:1px;justify-content:center;">${
             dayEvts.slice(0,3).map(e=>`<div style="width:3px;height:3px;border-radius:50%;background:${_evtColor(e)};"></div>`).join("")
           }${ceBizDots}</div>` : "";
+          const isBizHoliday = ceBizDay.some(e => e.type === "Holiday");
+          const numBorder = (!isToday && isBizHoliday) ? "1.5px solid #f59e0b" : "none";
           const tipParts = [...dayEvts.map(e=>e.title), ...ceBizDay.map(e=>e.title)];
           const tip = tipParts.length ? ` title="${tipParts.join(", ")}"` : "";
           return `<div${tip} style="height:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${bg};border-radius:2px;">
-            <div style="font-size:8px;font-weight:${isToday?700:400};color:${numCol};background:${numBg};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
+            <div style="font-size:8px;font-weight:${isToday?700:400};color:${numCol};background:${numBg};border:${numBorder};border-radius:50%;width:13px;height:13px;display:flex;align-items:center;justify-content:center;">${day}</div>
             ${dots}
           </div>`;
         }).join("") + `</div>`;
