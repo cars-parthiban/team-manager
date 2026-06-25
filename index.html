@@ -848,8 +848,9 @@ function renderManager() {
   if (_activeTab === "directory")  { renderDirectory();    return; }
   if (_activeTab === "archive")    { renderArchive();      return; }
   if (_activeTab === "onboarding") { renderOnboarding();   return; }
-  if (_activeTab === "recurring")    { renderRecurring();      return; }
+  if (_activeTab === "recurring")     { renderRecurring();       return; }
   if (_activeTab === "company_events") { renderCompanyEvents();  return; }
+  if (_activeTab === "ob_template")  { renderObTemplate();      return; }
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="manager-main"></div>`);
   if (_allTasks.length > 0) {
     renderManagerTable();
@@ -1394,16 +1395,57 @@ function tabBarHTML() {
   const tabs = [["tasks","Tasks"],["calendar","Absence Calendar"],["links","Links"],["contacts","Contacts"]];
   if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
-  if (SESSION.role === "Manager") tabs.push(["activity","User/Activity"]);
   if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
   if (SESSION.role === "Manager") tabs.push(["recurring","Recurring"]);
   if (SESSION.role === "Manager") tabs.push(["company_events","Events"]);
   tabs.push(["archive","Archive"]);
-  return `<div style="overflow-x:auto;margin-bottom:24px;"><div style="display:flex;gap:4px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;min-width:100%;">` +
-    tabs.map(([id,label]) => {
-      const a = _activeTab === id;
-      return `<button onclick="switchTab('${id}')" style="padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;white-space:nowrap;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
-    }).join("") + `</div></div>`;
+
+  const tabsHTML = tabs.map(([id,label]) => {
+    const a = _activeTab === id;
+    return `<button onclick="switchTab('${id}')" style="padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;white-space:nowrap;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
+  }).join("");
+
+  let gearHTML = "";
+  if (SESSION.role === "Manager") {
+    const configActive = _activeTab === "activity" || _activeTab === "ob_template";
+    gearHTML = `<button id="config-gear-btn" onclick="toggleConfigMenu(event)" title="Configuration"
+      style="padding:7px 12px;border-radius:8px;font-size:15px;border:none;cursor:pointer;white-space:nowrap;background:${configActive?"#1b4332":"transparent"};color:${configActive?"#fff":"#6b7280"};">⚙️</button>`;
+  }
+
+  return `<div style="overflow-x:auto;margin-bottom:24px;"><div style="display:flex;gap:4px;background:#fff;border-radius:10px;padding:4px;border:1px solid #d1fae5;width:fit-content;min-width:100%;align-items:center;">` +
+    tabsHTML + gearHTML + `</div></div>`;
+}
+
+function toggleConfigMenu(e) {
+  e.stopPropagation();
+  if (document.getElementById("config-dropdown")) { closeConfigMenu(); return; }
+  const btn  = document.getElementById("config-gear-btn");
+  const rect = btn.getBoundingClientRect();
+  const items = [
+    ["activity",    "👤 User / Activity"],
+    ["ob_template", "📋 Onboarding Template"]
+  ];
+  const rows = items.map(([id, label]) => {
+    const active = _activeTab === id;
+    return `<button onclick="closeConfigMenu();switchTab('${id}')"
+      style="display:block;width:100%;text-align:left;padding:10px 16px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:${active?"#f0fdf4":"#fff"};color:${active?"#1b4332":"#374151"};"
+      onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='${active?"#f0fdf4":"#fff"}'">
+      ${label}
+    </button>`;
+  }).join(`<div style="height:1px;background:#f3f4f6;"></div>`);
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="config-dropdown-backdrop" onclick="closeConfigMenu()"
+      style="position:fixed;inset:0;z-index:990;"></div>
+    <div id="config-dropdown"
+      style="position:fixed;top:${rect.bottom+6}px;right:${Math.round(window.innerWidth-rect.right)}px;background:#fff;border:1px solid #d1fae5;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.18);z-index:1000;min-width:210px;overflow:hidden;">
+      <div style="padding:6px 14px 5px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #f3f4f6;">Configuration</div>
+      ${rows}
+    </div>`);
+}
+
+function closeConfigMenu() {
+  document.getElementById("config-dropdown-backdrop")?.remove();
+  document.getElementById("config-dropdown")?.remove();
 }
 
 function switchTab(tab) {
@@ -4049,13 +4091,26 @@ async function loadOnboarding() {
 }
 
 function renderOnboarding() {
+  _obView = "checklist";
   document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="ob-main"></div>`);
   if (!_obLoaded) {
     document.getElementById("ob-main").innerHTML = `<div class="spinner"></div>`;
     loadOnboarding().then(_renderObContent);
   } else {
     _renderObContent();
-    loadOnboarding().then(_renderObContent); // background refresh
+    loadOnboarding().then(_renderObContent);
+  }
+}
+
+function renderObTemplate() {
+  _obView = "template";
+  document.getElementById("app").innerHTML = shellHTML("Manager", SESSION.name, tabBarHTML() + `<div id="ob-main"></div>`);
+  if (!_obLoaded) {
+    document.getElementById("ob-main").innerHTML = `<div class="spinner"></div>`;
+    loadOnboarding().then(_renderObContent);
+  } else {
+    _renderObContent();
+    loadOnboarding().then(_renderObContent);
   }
 }
 
@@ -4064,18 +4119,7 @@ function _obTeamNames() { return getTeamNames(); }
 function _renderObContent() {
   const el = document.getElementById("ob-main");
   if (!el) return;
-  el.innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:20px;">
-      <button onclick="_obSetView('checklist')"
-        style="padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;
-               background:${_obView==="checklist"?"#1b4332":"#f0fdf4"};color:${_obView==="checklist"?"#fff":"#1b4332"};">
-        👥 Member Checklists</button>
-      <button onclick="_obSetView('template')"
-        style="padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;
-               background:${_obView==="template"?"#1b4332":"#f0fdf4"};color:${_obView==="template"?"#fff":"#1b4332"};">
-        📋 Manage Templates</button>
-    </div>
-    ${_obView === "checklist" ? _renderObChecklistView() : _renderObTemplateView()}`;
+  el.innerHTML = _obView === "template" ? _renderObTemplateView() : _renderObChecklistView();
 }
 
 function _obSetView(v) { _obView = v; _renderObContent(); }
