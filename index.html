@@ -576,16 +576,21 @@ function renderMember() {
   if ((SESSION.pages||[]).length > 0) {
     const allowed = new Set(SESSION.pages);
     if (!allowed.has(_activeTab)) {
-      const order = ["tasks","calendar","events","links","contacts","directory","archive"];
+      const order = ["tasks","calendar","events","links","contacts","directory","onboarding","recurring","company_events","archive","activity","ob_template"];
       _activeTab = order.find(t => allowed.has(t)) || "tasks";
     }
   }
-  if (_activeTab === "calendar")   { renderCalendar();     return; }
-  if (_activeTab === "links")      { renderLinks();        return; }
-  if (_activeTab === "contacts")   { renderContacts();     return; }
-  if (_activeTab === "events")     { renderTeamEvents();   return; }
-  if (_activeTab === "directory")  { renderDirectory();    return; }
-  if (_activeTab === "archive")    { renderArchive();      return; }
+  if (_activeTab === "calendar")       { renderCalendar();       return; }
+  if (_activeTab === "links")          { renderLinks();          return; }
+  if (_activeTab === "contacts")       { renderContacts();       return; }
+  if (_activeTab === "events")         { renderTeamEvents();     return; }
+  if (_activeTab === "directory")      { renderDirectory();      return; }
+  if (_activeTab === "archive")        { renderArchive();        return; }
+  if (_activeTab === "onboarding")     { renderOnboarding();     return; }
+  if (_activeTab === "recurring")      { renderRecurring();      return; }
+  if (_activeTab === "company_events") { renderCompanyEvents();  return; }
+  if (_activeTab === "activity")       { renderActivity();       return; }
+  if (_activeTab === "ob_template")    { renderObTemplate();     return; }
   document.getElementById("app").innerHTML = shellHTML("Member", SESSION.name, tabBarHTML() + `<div id="member-main"></div>`);
   if (_memberTasks.length > 0) {
     renderMemberTable();
@@ -1402,17 +1407,19 @@ function closeAddTaskModal() {
 
 // ── CALENDAR ───────────────────────────────────────────────────────────────────
 function tabBarHTML() {
+  const isManager = SESSION.role === "Manager";
+  const memberPg  = new Set(SESSION.pages||[]);
+
   const tabs = [["tasks","Tasks"],["calendar","Absence Calendar"],["links","Links"],["contacts","Contacts"]];
-  if (SESSION.role === "Manager" || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
+  if (isManager || (SESSION.teams||[]).length > 0) tabs.push(["events","Business Calendar"]);
   tabs.push(["directory","Directory"]);
-  if (SESSION.role === "Manager") tabs.push(["onboarding","Onboarding"]);
-  if (SESSION.role === "Manager") tabs.push(["recurring","Recurring"]);
-  if (SESSION.role === "Manager") tabs.push(["company_events","Events"]);
+  if (isManager || memberPg.has("onboarding"))     tabs.push(["onboarding","Onboarding"]);
+  if (isManager || memberPg.has("recurring"))      tabs.push(["recurring","Recurring"]);
+  if (isManager || memberPg.has("company_events")) tabs.push(["company_events","Events"]);
   tabs.push(["archive","Archive"]);
 
-  // For members: restrict to allowed pages when configured
-  const allowedPages = SESSION.role !== "Manager" && (SESSION.pages||[]).length > 0
-    ? new Set(SESSION.pages) : null;
+  // For members: restrict to allowed pages when configured (non-empty pages = explicit list)
+  const allowedPages = !isManager && memberPg.size > 0 ? memberPg : null;
   const visibleTabs = allowedPages ? tabs.filter(([id]) => allowedPages.has(id)) : tabs;
 
   const tabsHTML = visibleTabs.map(([id,label]) => {
@@ -1421,7 +1428,7 @@ function tabBarHTML() {
   }).join("");
 
   let gearHTML = "";
-  if (SESSION.role === "Manager") {
+  if (isManager || memberPg.has("activity") || memberPg.has("ob_template")) {
     const configActive = _activeTab === "activity" || _activeTab === "ob_template";
     gearHTML = `<button id="config-gear-btn" onclick="toggleConfigMenu(event)" title="Configuration"
       style="padding:7px 12px;border-radius:8px;font-size:15px;border:none;cursor:pointer;white-space:nowrap;background:${configActive?"#1b4332":"transparent"};color:${configActive?"#fff":"#6b7280"};">⚙️</button>`;
@@ -2128,7 +2135,7 @@ async function doDeleteCalEvent(rowIndex) {
 // ── USER MANAGEMENT ────────────────────────────────────────────────────────────
 function renderUsersPanel() {
   const users = (window._configRows || []).filter(r => r[0]);
-  const PAGE_LABELS = {tasks:"Tasks",calendar:"Absence Cal",events:"Biz Cal",links:"Links",contacts:"Contacts",directory:"Directory",archive:"Archive"};
+  const PAGE_LABELS = {tasks:"Tasks",calendar:"Absence Cal",events:"Biz Cal",links:"Links",contacts:"Contacts",directory:"Directory",archive:"Archive",onboarding:"Onboarding",recurring:"Recurring",company_events:"Events",activity:"Users/Activity",ob_template:"OB Template"};
   const rows = users.map((r, i) => {
     const name   = r[0], role = r[2], title = r[5]||"", team = r[6]||"", pages = r[7]||"";
     const status = (window._accountStatus || {})[name] || { failed: 0, locked: false };
@@ -2242,7 +2249,7 @@ function _openUserModal(name) {
           <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Allowed Pages</label>
           <div style="display:flex;flex-wrap:wrap;gap:10px;padding:10px 12px;border:1.5px solid #d1fae5;border-radius:8px;background:#f9fafb;margin-bottom:14px;">
             ${(()=>{
-              const MEMBER_PAGES = [["tasks","Tasks"],["calendar","Absence Calendar"],["events","Business Calendar"],["links","Links"],["contacts","Contacts"],["directory","Directory"],["archive","Archive"]];
+              const MEMBER_PAGES = [["tasks","Tasks"],["calendar","Absence Calendar"],["events","Business Calendar"],["links","Links"],["contacts","Contacts"],["directory","Directory"],["archive","Archive"],["onboarding","Onboarding"],["recurring","Recurring"],["company_events","Events"],["activity","User / Activity"],["ob_template","Onboarding Template"]];
               const savedPages = (r[7]||"").split(",").map(x=>x.trim()).filter(Boolean);
               // empty = all pages allowed (default for new users)
               const allChecked = savedPages.length === 0;
