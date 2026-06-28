@@ -1443,10 +1443,12 @@ function toggleConfigMenu(e) {
   if (document.getElementById("config-dropdown")) { closeConfigMenu(); return; }
   const btn  = document.getElementById("config-gear-btn");
   const rect = btn.getBoundingClientRect();
-  const items = [
+  const allItems = [
     ["activity",    "👤 User / Activity"],
     ["ob_template", "📋 Onboarding Template"]
   ];
+  const memberPg = SESSION.role === "Manager" ? null : new Set(SESSION.pages||[]);
+  const items = memberPg ? allItems.filter(([id]) => memberPg.has(id)) : allItems;
   const rows = items.map(([id, label]) => {
     const active = _activeTab === id;
     return `<button onclick="closeConfigMenu();switchTab('${id}')"
