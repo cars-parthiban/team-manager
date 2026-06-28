@@ -399,12 +399,14 @@ async function doLogin() {
       return;
     }
     const parseTeams = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const parsePages = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
     if (user.role === "Manager") {
       const memberRows = window._configRows.filter(r => r[2] === "Member");
       const teams = [...new Set(window._configRows.flatMap(r => parseTeams(r[6])))];
       SESSION = { name: user.name, role: user.role, memberRows, teams };
     } else {
-      SESSION = { name: user.name, role: user.role, teams: parseTeams(user.team) };
+      const configRow = (window._configRows||[]).find(row => row[0] === user.name) || [];
+      SESSION = { name: user.name, role: user.role, teams: parseTeams(user.team), pages: parsePages(configRow[7]) };
     }
     resetAccountStatus(name);
     // Seed member colors from the full roster so all tabs use consistent unique colors
@@ -570,6 +572,14 @@ let _memberTasks = [];
 let _memberEditingTask = null;
 
 function renderMember() {
+  // Redirect to first allowed tab if current tab is restricted
+  if ((SESSION.pages||[]).length > 0) {
+    const allowed = new Set(SESSION.pages);
+    if (!allowed.has(_activeTab)) {
+      const order = ["tasks","calendar","events","links","contacts","directory","archive"];
+      _activeTab = order.find(t => allowed.has(t)) || "tasks";
+    }
+  }
   if (_activeTab === "calendar")   { renderCalendar();     return; }
   if (_activeTab === "links")      { renderLinks();        return; }
   if (_activeTab === "contacts")   { renderContacts();     return; }
@@ -1400,7 +1410,12 @@ function tabBarHTML() {
   if (SESSION.role === "Manager") tabs.push(["company_events","Events"]);
   tabs.push(["archive","Archive"]);
 
-  const tabsHTML = tabs.map(([id,label]) => {
+  // For members: restrict to allowed pages when configured
+  const allowedPages = SESSION.role !== "Manager" && (SESSION.pages||[]).length > 0
+    ? new Set(SESSION.pages) : null;
+  const visibleTabs = allowedPages ? tabs.filter(([id]) => allowedPages.has(id)) : tabs;
+
+  const tabsHTML = visibleTabs.map(([id,label]) => {
     const a = _activeTab === id;
     return `<button onclick="switchTab('${id}')" style="padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;border:none;cursor:pointer;white-space:nowrap;background:${a?"#1b4332":"transparent"};color:${a?"#fff":"#6b7280"};">${label}</button>`;
   }).join("");
@@ -2113,14 +2128,24 @@ async function doDeleteCalEvent(rowIndex) {
 // ── USER MANAGEMENT ────────────────────────────────────────────────────────────
 function renderUsersPanel() {
   const users = (window._configRows || []).filter(r => r[0]);
+  const PAGE_LABELS = {tasks:"Tasks",calendar:"Absence Cal",events:"Biz Cal",links:"Links",contacts:"Contacts",directory:"Directory",archive:"Archive"};
   const rows = users.map((r, i) => {
-    const name   = r[0], role = r[2], title = r[5]||"", team = r[6]||"";
+    const name   = r[0], role = r[2], title = r[5]||"", team = r[6]||"", pages = r[7]||"";
     const status = (window._accountStatus || {})[name] || { failed: 0, locked: false };
     const teams  = team.split(",").map(t=>t.trim()).filter(Boolean);
     const teamBadges = teams.map(t => {
       const tc = teamColor(t);
       return `<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:${tc.bg};color:${tc.color};border:1px solid ${tc.border};">${t}</span>`;
     }).join(" ");
+    let pagesBadges;
+    if (role === "Manager") {
+      pagesBadges = `<span style="font-size:10px;font-weight:600;color:#9ca3af;">All</span>`;
+    } else {
+      const pg = pages.split(",").map(t=>t.trim()).filter(Boolean);
+      pagesBadges = pg.length === 0
+        ? `<span style="font-size:10px;font-weight:600;color:#9ca3af;">All</span>`
+        : pg.map(p => `<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;">${PAGE_LABELS[p]||p}</span>`).join(" ");
+    }
     const attemptsBadge = status.failed > 0
       ? `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;background:${status.failed>=3?"#fff1f2":"#fef9c3"};color:${status.failed>=3?"#dc2626":"#92400e"};border:1px solid ${status.failed>=3?"#fca5a5":"#fde68a"};">${status.failed}</span>`
       : `<span style="font-size:12px;color:#9ca3af;">0</span>`;
@@ -2135,6 +2160,7 @@ function renderUsersPanel() {
       <td style="padding:9px 14px;">${roleBadge(role)}</td>
       <td style="padding:9px 14px;font-size:12px;color:#6b7280;">${title}</td>
       <td style="padding:9px 14px;">${teamBadges}</td>
+      <td style="padding:9px 14px;">${pagesBadges}</td>
       <td style="padding:9px 14px;text-align:center;">${attemptsBadge}</td>
       <td style="padding:9px 14px;white-space:nowrap;">
         ${lockBtn}
@@ -2159,9 +2185,9 @@ function renderUsersPanel() {
       <div style="overflow-x:auto;">
         <table style="width:100%;font-size:13px;">
           <thead><tr style="background:#f9fafb;">
-            ${["Name","Role","Title","Team","Attempts","Actions"].map(h=>`<th style="padding:9px 14px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">${h}</th>`).join("")}
+            ${["Name","Role","Title","Team","Pages","Attempts","Actions"].map(h=>`<th style="padding:9px 14px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">${h}</th>`).join("")}
           </tr></thead>
-          <tbody>${rows || `<tr><td colspan="6" style="padding:2rem;text-align:center;color:#9ca3af;">No users found.</td></tr>`}</tbody>
+          <tbody>${rows || `<tr><td colspan="7" style="padding:2rem;text-align:center;color:#9ca3af;">No users found.</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
@@ -2193,7 +2219,7 @@ function _openUserModal(name) {
         <input id="um-pin" type="password" maxlength="4" placeholder="••••" style="${F} letter-spacing:6px;margin-bottom:14px;"/>
 
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Role</label>
-        <select id="um-role" style="${F} margin-bottom:14px;">
+        <select id="um-role" onchange="document.getElementById('um-pages-section').style.display=this.value==='Manager'?'none':'block'" style="${F} margin-bottom:14px;">
           <option value="Member" ${r[2]==="Member"||!isEdit?"selected":""}>Member</option>
           <option value="Manager" ${r[2]==="Manager"?"selected":""}>Manager</option>
         </select>
@@ -2210,6 +2236,25 @@ function _openUserModal(name) {
                 style="width:14px;height:14px;accent-color:#1b4332;cursor:pointer;"/>
               ${escHtml(t)}</label>`;
           }).join("") : `<span style="font-size:12px;color:#9ca3af;">No teams defined yet — add teams in User/Activity tab.</span>`}
+        </div>
+
+        <div id="um-pages-section" style="display:${r[2]==="Manager"?"none":"block"}">
+          <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Allowed Pages</label>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;padding:10px 12px;border:1.5px solid #d1fae5;border-radius:8px;background:#f9fafb;margin-bottom:14px;">
+            ${(()=>{
+              const MEMBER_PAGES = [["tasks","Tasks"],["calendar","Absence Calendar"],["events","Business Calendar"],["links","Links"],["contacts","Contacts"],["directory","Directory"],["archive","Archive"]];
+              const savedPages = (r[7]||"").split(",").map(x=>x.trim()).filter(Boolean);
+              // empty = all pages allowed (default for new users)
+              const allChecked = savedPages.length === 0;
+              return MEMBER_PAGES.map(([id,label]) => {
+                const sel = allChecked || savedPages.includes(id);
+                return `<label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:#1b4332;">
+                  <input type="checkbox" class="um-page-cb" value="${id}" ${sel?"checked":""}
+                    style="width:14px;height:14px;accent-color:#1b4332;cursor:pointer;"/>
+                  ${label}</label>`;
+              }).join("");
+            })()}
+          </div>
         </div>
 
         <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:5px;text-transform:uppercase;">Email</label>
@@ -2240,6 +2285,7 @@ async function doSaveUser(isEdit) {
   const role  = document.getElementById("um-role").value;
   const title = document.getElementById("um-title").value.trim();
   const team  = [...document.querySelectorAll(".um-team-cb:checked")].map(cb => cb.value).join(",");
+  const pages = role === "Manager" ? "" : [...document.querySelectorAll(".um-page-cb:checked")].map(cb => cb.value).join(",");
   const email = document.getElementById("um-email").value.trim();
   const phone = document.getElementById("um-phone").value.trim();
   const errEl = document.getElementById("um-error");
@@ -2254,19 +2300,19 @@ async function doSaveUser(isEdit) {
   try {
     if (isEdit) {
       const result = await proxyCall({ action: "updateUser", sheetId: CALENDAR_SHEET_ID,
-        name, newPin: pin, role, title, team, email, phone });
+        name, newPin: pin, role, title, team, pages, email, phone });
       if (!result || !result.ok) throw new Error(result?.error || "Update failed");
       // Update _configRows in memory
       window._configRows = (window._configRows||[]).map(r =>
-        r[0] === name ? [r[0], r[1], role, email, phone, title, team] : r
+        r[0] === name ? [r[0], r[1], role, email, phone, title, team, pages] : r
       );
     } else {
       if ((window._configRows||[]).some(r => r[0] === name)) {
         errEl.textContent = "A user with this name already exists.";
         btnEl.disabled = false; btnEl.textContent = "Add User"; return;
       }
-      await appendRow(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME, [name, pin, role, email, phone, title, team]);
-      window._configRows = [...(window._configRows||[]), [name, "", role, email, phone, title, team]];
+      await appendRow(CALENDAR_SHEET_ID, CONFIG_SHEET_NAME, [name, pin, role, email, phone, title, team, pages]);
+      window._configRows = [...(window._configRows||[]), [name, "", role, email, phone, title, team, pages]];
       // Update login name cache
       setCachedLoginNames((window._configRows||[]).filter(r=>r[0]).map(r=>r[0]));
     }
@@ -3169,7 +3215,8 @@ function viewAsMember(name) {
   _proxySession = SESSION;
   const r = (window._configRows || []).find(r => r[0] === name) || [];
   const parseTeams = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
-  SESSION = { name, role: "Member", teams: parseTeams(r[6]) };
+  const parsePages = v => (v||"").split(",").map(t=>t.trim()).filter(Boolean);
+  SESSION = { name, role: "Member", teams: parseTeams(r[6]), pages: parsePages(r[7]) };
   _activeTab = "tasks";
   render();
 }
