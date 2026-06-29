@@ -82,7 +82,8 @@ function rowsToTasks(rows) {
     rowIndex: i + 2,
     taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
     dueDate: r[3]||"", priority: r[4]||"Medium",
-    status: r[5]||"Not Started", notes: r[6]||"", url: r[7]||""
+    status: r[5]||"Not Started", notes: r[6]||"", url: r[7]||"",
+    enteredDate: r[8]||"", enteredBy: r[9]||"", updatedDate: r[10]||"", updatedBy: r[11]||""
   }));
 }
 function rowsToArchiveTasks(rows) {
@@ -92,8 +93,23 @@ function rowsToArchiveTasks(rows) {
     taskId: r[0]||"", assignedTo: r[1]||"", task: r[2]||"",
     dueDate: r[3]||"", priority: r[4]||"Medium",
     status: r[5]||"", notes: r[6]||"", url: r[7]||"",
-    archivedDate: r[8]||""
+    archivedDate: r[8]||"",
+    enteredDate: r[9]||"", enteredBy: r[10]||"", updatedDate: r[11]||"", updatedBy: r[12]||""
   }));
+}
+function _todayISO() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true
+  }).formatToParts(now);
+  const get = t => parts.find(p => p.type === t).value;
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const day  = String(get("day")).padStart(2, "0");
+  const mon  = MONTHS[parseInt(get("month")) - 1];
+  const ampm = parts.find(p => p.type === "dayPeriod").value.toUpperCase();
+  return `${day}-${mon}-${get("year")} ${get("hour")}:${get("minute")} ${ampm} CST`;
 }
 function normalizeUrl(url) {
   if (!url) return "";
@@ -746,20 +762,21 @@ function renderMemberTable() {
     : sortedMember.map(t => {
         const ov = isOverdue(t.dueDate) && t.status !== "Completed";
         return `<tr style="background:${ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
-          <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
-          <td style="padding:10px 12px;max-width:220px;">${t.task}</td>
-          <td id="td-due-${t.rowIndex}" style="padding:10px 12px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
-          <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
-          <td id="td-status-${t.rowIndex}" style="padding:10px 12px;">${_statusCellInner(t)}</td>
+          <td style="padding:10px 5px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+          <td style="padding:10px 8px;max-width:300px;">${t.task}</td>
+          <td id="td-due-${t.rowIndex}" style="padding:10px 6px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
+          <td style="padding:10px 6px;">${priorityBadge(t.priority)}</td>
+          <td id="td-status-${t.rowIndex}" style="padding:10px 6px;">${_statusCellInner(t)}</td>
           <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
           </td>
-          <td style="padding:10px 12px;white-space:nowrap;">
+          <td style="padding:8px 8px;white-space:nowrap;">
             ${_commentBtnHTML(t.taskId)}
-            <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Edit</button>
-            <button onclick="doArchiveTask(${t.rowIndex})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Archive</button>
-            <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Delete</button>
+            <button onclick="showTaskAuditLog(_memberTasks.find(x=>x.rowIndex===${t.rowIndex}))" style="background:#f0f9ff;color:#1e40af;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:1px solid #bfdbfe;cursor:pointer;margin-left:2px;" title="Audit Log">Log</button>
+            <button onclick="openEditTaskModal(${t.rowIndex})" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;">Edit</button>
+            <button onclick="doArchiveTask(${t.rowIndex})" style="background:#fef9c3;color:#854d0e;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;">Archive</button>
+            <button onclick="memberDeleteTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:14px;font-weight:700;padding:2px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;line-height:1;" title="Delete">✕</button>
           </td></tr>`;
       }).join("");
 
@@ -767,14 +784,14 @@ function renderMemberTable() {
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
-          ${_thSort("Task ID","taskId")}
-          ${_thSort("Task","task")}
-          ${_thSort("Due Date","dueDate")}
-          ${_thSort("Priority","priority")}
-          ${_thSort("Status","status")}
+          ${_thSort("Task ID","taskId","padding:10px 5px")}
+          ${_thSort("Task","task","padding:10px 8px")}
+          ${_thSort("Due Date","dueDate","padding:10px 6px")}
+          ${_thSort("Priority","priority","padding:10px 6px")}
+          ${_thSort("Status","status","padding:10px 6px")}
           ${_thSort("Notes","notes")}
           ${_thSort("URL","url")}
-          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
+          <th style="padding:10px 8px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -800,14 +817,19 @@ async function memberAddTask() {
   const notes    = document.getElementById("at-notes").value;
   const url      = document.getElementById("at-url").value.trim();
   if (!task) { document.getElementById("at-error").textContent = "Task description is required."; return; }
+  const _atBtn = document.getElementById("at-submit-btn");
+  if (_atBtn) { _atBtn.disabled = true; _atBtn.textContent = "Saving…"; _atBtn.style.background = "#9ca3af"; _atBtn.style.cursor = "not-allowed"; }
   try {
     const allRows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
     const taskId  = nextTaskId(rowsToTasks(allRows));
-    await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, SESSION.name, task, dueDate, priority, status, notes, url]);
+    await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, SESSION.name, task, dueDate, priority, status, notes, url, _todayISO(), SESSION.name, "", ""]);
     closeAddTaskModal();
     await loadMemberTasks();
     showToast("Task added ✓");
-  } catch(e) { alert("Failed to add task: " + e.message); }
+  } catch(e) {
+    if (_atBtn) { _atBtn.disabled = false; _atBtn.textContent = "Add Task"; _atBtn.style.background = "#1b4332"; _atBtn.style.cursor = "pointer"; }
+    alert("Failed to add task: " + e.message);
+  }
 }
 
 // ── ARCHIVE STATE ──────────────────────────────────────────────────────────────
@@ -847,11 +869,12 @@ function _sortedTasks(tasks) {
   });
 }
 
-function _thSort(label, col) {
+function _thSort(label, col, pad) {
   const active = _taskSortCol === col;
   const arrow  = active ? (_taskSortDir === "asc" ? " ▲" : " ▼") : ` <span style="color:#d1fae5;font-size:10px;">↕</span>`;
   const border = active ? "border-bottom:2px solid #1b4332" : "border-bottom:2px solid #d1fae5";
-  return `<th onclick="setTaskSort('${col}')" style="padding:10px 12px;font-weight:600;color:#1b4332;${border};white-space:nowrap;cursor:pointer;user-select:none;" title="Sort by ${label}">${label}${arrow}</th>`;
+  const p      = pad || "padding:10px 12px";
+  return `<th onclick="setTaskSort('${col}')" style="${p};font-weight:600;color:#1b4332;${border};white-space:nowrap;cursor:pointer;user-select:none;" title="Sort by ${label}">${label}${arrow}</th>`;
 }
 
 function renderManager() {
@@ -985,24 +1008,25 @@ function renderManagerTable(showAddForm) {
         const checked = _selectedTaskRows.has(t.rowIndex);
         const ri      = t.rowIndex;
         return `<tr style="background:${checked?"#f0fdf4":ov?"#fff1f2":"#fff"};border-bottom:1px solid #f0fdf4;">
-          <td style="padding:10px 12px;text-align:center;">
+          <td style="padding:10px 4px;text-align:center;">
             <input type="checkbox" ${checked?"checked":""} onchange="toggleTaskSelect(${ri})" style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;"/>
           </td>
-          <td style="padding:10px 12px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
-          <td style="padding:10px 12px;white-space:nowrap;font-weight:500;color:#1b4332;">${t.assignedTo.split(" ")[0]}</td>
-          <td style="padding:10px 12px;max-width:200px;">${t.task}</td>
-          <td id="td-due-${ri}" style="padding:10px 12px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
-          <td style="padding:10px 12px;">${priorityBadge(t.priority)}</td>
-          <td id="td-status-${ri}" style="padding:10px 12px;">${_statusCellInner(t)}</td>
+          <td style="padding:10px 5px;color:#6b7280;white-space:nowrap;">${t.taskId}</td>
+          <td style="padding:10px 6px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:#1b4332;" title="${escHtml(t.assignedTo)}">${t.assignedTo.split(" ")[0]}</td>
+          <td style="padding:10px 8px;max-width:300px;">${t.task}</td>
+          <td id="td-due-${ri}" style="padding:10px 6px;white-space:nowrap;">${_dueDateCellInner(t)}</td>
+          <td style="padding:10px 6px;">${priorityBadge(t.priority)}</td>
+          <td id="td-status-${ri}" style="padding:10px 6px;">${_statusCellInner(t)}</td>
           <td style="padding:10px 12px;max-width:220px;">${notesCellHTML(t.notes, t.rowIndex)}</td>
           <td style="padding:10px 12px;white-space:nowrap;">
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
           </td>
-          <td style="padding:10px 12px;white-space:nowrap;">
+          <td style="padding:8px 8px;white-space:nowrap;">
             ${_commentBtnHTML(t.taskId)}
-            <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Edit</button>
-            <button onclick="doArchiveTask(${ri})" style="background:#fef9c3;color:#854d0e;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Archive</button>
-            <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;margin-left:4px;">Delete</button>
+            <button onclick="showTaskAuditLog(_allTasks.find(x=>x.rowIndex===${ri}))" style="background:#f0f9ff;color:#1e40af;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:1px solid #bfdbfe;cursor:pointer;margin-left:2px;" title="Audit Log">Log</button>
+            <button onclick="openEditTaskModal(${ri})" style="background:#f0fdf4;color:#1b4332;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;">Edit</button>
+            <button onclick="doArchiveTask(${ri})" style="background:#fef9c3;color:#854d0e;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;">Archive</button>
+            <button onclick="doDelete(${ri})" style="background:#fff1f2;color:#dc2626;font-size:14px;font-weight:700;padding:2px 6px;border-radius:6px;border:none;margin-left:2px;cursor:pointer;line-height:1;" title="Delete">✕</button>
           </td></tr>`;
       }).join("");
 
@@ -1010,18 +1034,18 @@ function renderManagerTable(showAddForm) {
     <div style="overflow-x:auto;">
       <table style="font-size:13px;">
         <thead><tr style="background:#f0fdf4;">
-          <th style="padding:10px 12px;border-bottom:2px solid #d1fae5;text-align:center;">
+          <th style="padding:10px 4px;border-bottom:2px solid #d1fae5;text-align:center;">
             <input type="checkbox" ${allChecked?"checked":""} onchange="toggleSelectAll()" style="width:15px;height:15px;cursor:pointer;accent-color:#1b4332;" title="Select all"/>
           </th>
-          ${_thSort("Task ID","taskId")}
-          ${_thSort("Assigned To","assignedTo")}
-          ${_thSort("Task","task")}
-          ${_thSort("Due Date","dueDate")}
-          ${_thSort("Priority","priority")}
-          ${_thSort("Status","status")}
+          ${_thSort("Task ID","taskId","padding:10px 5px")}
+          ${_thSort("Assigned To","assignedTo","padding:10px 6px")}
+          ${_thSort("Task","task","padding:10px 8px")}
+          ${_thSort("Due Date","dueDate","padding:10px 6px")}
+          ${_thSort("Priority","priority","padding:10px 6px")}
+          ${_thSort("Status","status","padding:10px 6px")}
           ${_thSort("Notes","notes")}
           ${_thSort("URL","url")}
-          <th style="padding:10px 12px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
+          <th style="padding:10px 8px;font-weight:600;color:#1b4332;border-bottom:2px solid #d1fae5;white-space:nowrap;">Actions</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -1103,17 +1127,22 @@ async function doAddTask() {
   const url      = document.getElementById("at-url").value.trim();
   if (!selected.length) { document.getElementById("at-error").textContent = "Please select at least one team member."; return; }
   if (!task) { document.getElementById("at-error").textContent = "Task description is required."; return; }
+  const _atBtn = document.getElementById("at-submit-btn");
+  if (_atBtn) { _atBtn.disabled = true; _atBtn.textContent = "Saving…"; _atBtn.style.background = "#9ca3af"; _atBtn.style.cursor = "not-allowed"; }
   try {
     let base = _allTasks.slice();
     for (const name of selected) {
       const taskId = nextTaskId(base);
-      await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, name, task, dueDate, priority, status, notes, url]);
+      await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, [taskId, name, task, dueDate, priority, status, notes, url, _todayISO(), SESSION.name, "", ""]);
       base.push({ taskId });
     }
     closeAddTaskModal();
     await reloadAllTasks();
     showToast(`Task added for ${selected.length} member${selected.length > 1 ? "s" : ""} ✓`);
-  } catch(e) { alert("Failed to add task: " + e.message); }
+  } catch(e) {
+    if (_atBtn) { _atBtn.disabled = false; _atBtn.textContent = "Add Task"; _atBtn.style.background = "#1b4332"; _atBtn.style.cursor = "pointer"; }
+    alert("Failed to add task: " + e.message);
+  }
 }
 
 // ── EDIT TASK MODAL ────────────────────────────────────────────────────────────
@@ -1219,7 +1248,7 @@ async function doSaveEditModal() {
   if (!task) { errEl.textContent = "Task description is required."; return; }
   try {
     await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, t.rowIndex,
-      [t.taskId, assignedTo, task, dueDate, priority, status, notes, url]);
+      [t.taskId, assignedTo, task, dueDate, priority, status, notes, url, t.enteredDate||"", t.enteredBy||"", _todayISO(), SESSION.name]);
     closeEditTaskModal();
     if (SESSION.role === "Manager") await reloadAllTasks();
     else await loadMemberTasks();
@@ -1236,6 +1265,40 @@ async function doDeleteFromEditModal() {
 }
 
 let _editTaskModal = null;
+
+function showTaskAuditLog(t) {
+  if (!t) return;
+  const val = v => v ? escHtml(v) : `<span style="color:#9ca3af;">—</span>`;
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="audit-log-modal" onclick="if(event.target===this)document.getElementById('audit-log-modal').remove()"
+      style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:1100;">
+      <div onclick="event.stopPropagation()"
+        style="background:#fff;border-radius:14px;padding:1.5rem 1.75rem;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <span style="font-size:15px;font-weight:700;color:#1b4332;">Audit Log — ${escHtml(t.taskId)}</span>
+          <button onclick="document.getElementById('audit-log-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#6b7280;line-height:1;">&times;</button>
+        </div>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <tr style="border-bottom:1px solid #f0fdf4;">
+            <td style="padding:10px 4px;color:#6b7280;font-weight:600;width:130px;">Entered Date</td>
+            <td style="padding:10px 4px;color:#1b4332;">${val(t.enteredDate)}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0fdf4;">
+            <td style="padding:10px 4px;color:#6b7280;font-weight:600;">Entered By</td>
+            <td style="padding:10px 4px;color:#1b4332;">${val(t.enteredBy)}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0fdf4;">
+            <td style="padding:10px 4px;color:#6b7280;font-weight:600;">Updated Date</td>
+            <td style="padding:10px 4px;color:#1b4332;">${val(t.updatedDate)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 4px;color:#6b7280;font-weight:600;">Updated By</td>
+            <td style="padding:10px 4px;color:#1b4332;">${val(t.updatedBy)}</td>
+          </tr>
+        </table>
+      </div>
+    </div>`);
+}
 
 // ── INLINE TASK EDITING ────────────────────────────────────────────────────────
 function _findTaskByRow(rowIndex) {
@@ -1280,7 +1343,7 @@ async function saveInlineDueDate(rowIndex, newDate) {
   if (tr) tr.style.background = ov ? "#fff1f2" : "#fff";
   try {
     await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
-      [t.taskId, t.assignedTo, t.task, newDate, t.priority, t.status, t.notes, t.url]);
+      [t.taskId, t.assignedTo, t.task, newDate, t.priority, t.status, t.notes, t.url, t.enteredDate||"", t.enteredBy||"", _todayISO(), SESSION.name]);
     showToast("Saved ✓");
   } catch(e) { showToast("Save failed ✗"); }
 }
@@ -1315,7 +1378,7 @@ async function saveInlineStatus(rowIndex, newStatus) {
   if (tr) tr.style.background = ov ? "#fff1f2" : "#fff";
   try {
     await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
-      [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, newStatus, t.notes, t.url]);
+      [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, newStatus, t.notes, t.url, t.enteredDate||"", t.enteredBy||"", _todayISO(), SESSION.name]);
     showToast("Saved ✓");
   } catch(e) { showToast("Save failed ✗"); }
 }
@@ -1392,7 +1455,7 @@ function renderAddTaskModal() {
         <div id="at-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
           <button onclick="closeAddTaskModal()" style="background:#fff;color:#374151;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:1.5px solid #e5e7eb;cursor:pointer;">Cancel</button>
-          <button onclick="${isManager?"doAddTask()":"memberAddTask()"}" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Add Task</button>
+          <button id="at-submit-btn" onclick="${isManager?"doAddTask()":"memberAddTask()"}" style="background:#1b4332;color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;border:none;cursor:pointer;">Add Task</button>
         </div>
       </div>
     </div>`);
@@ -5714,7 +5777,7 @@ async function doArchiveTask(rowIndex) {
     const today = new Date();
     const archivedDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
     await appendRow(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME,
-      [task.taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url, archivedDate]);
+      [task.taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url, archivedDate, task.enteredDate||"", task.enteredBy||"", task.updatedDate||"", task.updatedBy||""]);
     await deleteRowProxy(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex);
     _sDel(ARCHIVE_CACHE_KEY);
     _archiveLoaded = false;
@@ -5751,7 +5814,7 @@ async function doUnarchiveTask(rowIndex) {
     const allRows = await readSheet(CALENDAR_SHEET_ID, TASKS_SHEET_NAME);
     const taskId  = nextTaskId(rowsToTasks(allRows));
     await appendRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME,
-      [taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url]);
+      [taskId, task.assignedTo, task.task, task.dueDate, task.priority, task.status, task.notes, task.url, task.enteredDate||"", task.enteredBy||"", _todayISO(), SESSION.name]);
     await deleteRowProxy(CALENDAR_SHEET_ID, ARCHIVE_SHEET_NAME, rowIndex);
     _sDel(ARCHIVE_CACHE_KEY);
     _archiveLoaded = false;
@@ -5760,7 +5823,9 @@ async function doUnarchiveTask(rowIndex) {
       rowIndex: allRows.length + 1,
       taskId, assignedTo: task.assignedTo, task: task.task,
       dueDate: task.dueDate, priority: task.priority,
-      status: task.status, notes: task.notes, url: task.url
+      status: task.status, notes: task.notes, url: task.url,
+      enteredDate: task.enteredDate||"", enteredBy: task.enteredBy||"",
+      updatedDate: _todayISO(), updatedBy: SESSION.name
     };
     if (_allTasks.length > 0) {
       _allTasks = [..._allTasks, newTask];
@@ -5942,9 +6007,10 @@ function renderArchiveTable() {
             ${t.url ? `<a href="${normalizeUrl(t.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600;color:#1b4332;background:#f0fdf4;border:1px solid #d1fae5;padding:3px 9px;border-radius:5px;text-decoration:none;">🔗 Open</a>` : `<span style="color:#e5e7eb;font-size:11px;">—</span>`}
           </td>
           <td style="padding:10px 12px;white-space:nowrap;font-size:11px;color:#6b7280;">${formatDueDate(t.archivedDate)}</td>
-          <td style="padding:10px 12px;white-space:nowrap;">
-            <button onclick="doUnarchiveTask(${t.rowIndex})" style="background:#dbeafe;color:#1e40af;font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;border:none;cursor:pointer;">Unarchive</button>
-            <button onclick="doDeleteArchivedTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;border:none;cursor:pointer;margin-left:6px;">Del</button>
+          <td style="padding:8px 8px;white-space:nowrap;">
+            <button onclick="showTaskAuditLog(_archiveTasks.find(x=>x.rowIndex===${t.rowIndex}))" style="background:#f0f9ff;color:#1e40af;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:1px solid #bfdbfe;cursor:pointer;" title="Audit Log">Log</button>
+            <button onclick="doUnarchiveTask(${t.rowIndex})" style="background:#dbeafe;color:#1e40af;font-size:11px;font-weight:600;padding:3px 6px;border-radius:6px;border:none;cursor:pointer;margin-left:2px;">Unarchive</button>
+            <button onclick="doDeleteArchivedTask(${t.rowIndex})" style="background:#fff1f2;color:#dc2626;font-size:14px;font-weight:700;padding:2px 6px;border-radius:6px;border:none;cursor:pointer;margin-left:2px;line-height:1;" title="Delete">✕</button>
           </td>
         </tr>`;
       }).join("");
