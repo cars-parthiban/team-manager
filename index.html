@@ -6271,8 +6271,9 @@ async function spawnRecurringNow() {
     const count = result?.spawned ?? 0;
     showToast(count > 0 ? `${count} task${count>1?"s":""} spawned` : "No tasks due to spawn today");
     if (count > 0) {
-      _sDel("tmgr_tasks");
-      loadAllTasks();
+      _allTasks = [];        // force fresh fetch on next Tasks tab visit
+      _sDel("tmgr_tasks");   // clear cache
+      switchTab("tasks");    // navigate so user sees the spawned tasks immediately
     }
   } catch(e) {
     showToast("Error: " + e.message);
