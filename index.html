@@ -2780,21 +2780,21 @@ function renderLinksView() {
       style="width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border-radius:20px;border:1.5px solid #d1fae5;font-size:12px;outline:none;"/>
   </div>`;
 
-  const filterChips = showChips ? `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-      ${[{t:"All",label:"All"}, ...teamSet.map(t=>({t,label:t}))].map(({t,label}) => {
+  const filterChips = showChips
+    ? [{ t:"All", label:"All" }, ...teamSet.map(t=>({ t, label:t }))].map(({ t, label }) => {
         const active = _linksFilterTeam === t;
-        const tc = t === "All" ? {bg:"#1b4332",color:"#fff",border:"#1b4332"} : teamColor(t);
+        const tc = t === "All" ? { bg:"#1b4332", color:"#fff", border:"#1b4332" } : teamColor(t);
         const bg = active ? tc.bg : "#f9fafb";
         const fg = active ? tc.color : "#374151";
         const border = active ? tc.border : "#e5e7eb";
         return `<button onclick="setLinksFilter('${t}')"
-          style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;border:1.5px solid ${border};background:${bg};color:${fg};cursor:pointer;">${label}</button>`;
-      }).join("")}
-    </div>` : "";
+          style="padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;border:1.5px solid ${border};background:${bg};color:${fg};cursor:pointer;white-space:nowrap;">${label}</button>`;
+      }).join("")
+    : "";
 
-  const topBar = `${filterChips}
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+  const topBar = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      ${filterChips}
       ${searchBox}
       <div style="flex:1;"></div>
       ${addBtn}
