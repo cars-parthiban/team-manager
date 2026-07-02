@@ -227,6 +227,7 @@ let _activeTeamCal = "", _teamCalYear = new Date().getFullYear(), _teamCalMonth 
 let _teamCalView = "month", _teamEventModal = null;
 let _companyEvents = [], _companyEventsLoaded = false;
 let _companyEventModal = null, _companyEventTypeFilter = "all";
+let _tasksRefreshInterval = null;
 
 function render() {
   if (!SESSION) renderLogin();
@@ -518,7 +519,7 @@ function shellHTML(roleLabel, userName, mainContent) {
     </div>`;
 }
 
-function signOut() { SESSION = null; _proxySession = null; _activeTab = "tasks"; _memberColorMap = {}; render(); }
+function signOut() { _stopTasksAutoRefresh(); SESSION = null; _proxySession = null; _activeTab = "tasks"; _memberColorMap = {}; render(); }
 
 function prefetchAllTabs() {
   // Fire all tab data fetches in parallel right after login
@@ -611,12 +612,14 @@ function renderMember() {
   if (_memberTasks.length > 0) {
     renderMemberTable();
     _bgRefreshMemberTasks();
+    _startTasksAutoRefresh();
   } else {
     const cached = getCachedTasks();
     if (cached) {
       _memberTasks = cached.filter(t => t.assignedTo === SESSION.name);
       renderMemberTable();
       _bgRefreshMemberTasks();
+      _startTasksAutoRefresh();
     } else {
       document.getElementById("member-main").innerHTML = `<div class="spinner"></div>`;
       loadMemberTasks();
@@ -638,6 +641,7 @@ async function loadMemberTasks() {
     _memberTasks = all.filter(t => t.assignedTo === SESSION.name);
     _memberEditingTask = null;
     renderMemberTable(); // always render — clears spinner even when task list is empty
+    _startTasksAutoRefresh();
   } catch(e) {
     if (!cached) document.getElementById("member-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
       <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
@@ -748,7 +752,10 @@ function renderMemberTable() {
 
   const addRow = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
     <button onclick="openAddTaskModal()" style="padding:7px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
-    ${taskViewToggleHTML()}
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="tasks-refresh-btn" onclick="manualRefreshTasks()" style="padding:7px 12px;border-radius:8px;background:#f0f9ff;color:#1e40af;font-size:12px;font-weight:600;border:1px solid #bfdbfe;cursor:pointer;">⟳ Refresh</button>
+      ${taskViewToggleHTML()}
+    </div>
   </div>`;
 
   if (_taskView === "board") {
@@ -893,6 +900,7 @@ function renderManager() {
   if (_allTasks.length > 0) {
     renderManagerTable();
     _bgRefreshAllTasks();
+    _startTasksAutoRefresh();
   } else {
     const cached = getCachedTasks();
     if (cached) {
@@ -900,6 +908,7 @@ function renderManager() {
       _filterMember = "All";
       renderManagerTable();
       _bgRefreshAllTasks();
+      _startTasksAutoRefresh();
     } else {
       document.getElementById("manager-main").innerHTML = `<div class="spinner"></div>`;
       loadAllTasks();
@@ -922,6 +931,7 @@ async function loadAllTasks() {
     _filterMember = "All";
     _editingTask  = null;
     renderManagerTable(); // always render — clears spinner even when task list is empty
+    _startTasksAutoRefresh();
   } catch(e) {
     if (!cached) document.getElementById("manager-main").innerHTML = `<div style="background:#fee2e2;color:#991b1b;padding:16px 20px;border-radius:12px;margin:16px 0;">
       <div style="font-weight:600;margin-bottom:6px;">Failed to load tasks</div>
@@ -944,6 +954,28 @@ async function _bgRefreshAllTasks() {
       renderManagerTable();
     }
   } catch {}
+}
+
+function _startTasksAutoRefresh() {
+  if (_tasksRefreshInterval) return;
+  _tasksRefreshInterval = setInterval(() => {
+    if (_activeTab !== "tasks" || !SESSION) { _stopTasksAutoRefresh(); return; }
+    SESSION.role === "Manager" ? _bgRefreshAllTasks() : _bgRefreshMemberTasks();
+  }, 60000);
+}
+function _stopTasksAutoRefresh() {
+  if (_tasksRefreshInterval) { clearInterval(_tasksRefreshInterval); _tasksRefreshInterval = null; }
+}
+
+async function manualRefreshTasks() {
+  const btn = document.getElementById("tasks-refresh-btn");
+  if (btn) { btn.disabled = true; btn.innerHTML = "Refreshing…"; }
+  clearTasksCache();
+  if (SESSION.role === "Manager") {
+    await loadAllTasks();
+  } else {
+    await loadMemberTasks();
+  }
 }
 
 function renderManagerTable(showAddForm) {
@@ -987,6 +1019,7 @@ function renderManagerTable(showAddForm) {
   const topRow = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
     <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;align-items:center;">${filterBtns}${clearBtn}</div>
     <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <button id="tasks-refresh-btn" onclick="manualRefreshTasks()" style="padding:7px 12px;border-radius:8px;background:#f0f9ff;color:#1e40af;font-size:12px;font-weight:600;border:1px solid #bfdbfe;cursor:pointer;">⟳ Refresh</button>
       <button onclick="openAddTaskModal()" style="padding:7px 16px;border-radius:8px;background:#1b4332;color:#fff;font-size:13px;font-weight:600;border:none;">+ Add Task</button>
       ${deleteSelBtn}
       ${taskViewToggleHTML()}
@@ -1379,6 +1412,16 @@ async function saveInlineStatus(rowIndex, newStatus) {
   try {
     await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
       [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, newStatus, t.notes, t.url, t.enteredDate||"", t.enteredBy||"", _todayISO(), SESSION.name]);
+    if (SESSION.role === "Manager") {
+      setCachedTasks(_allTasks);
+    } else {
+      const allCached = getCachedTasks();
+      if (allCached) {
+        const ct = allCached.find(x => x.rowIndex === rowIndex);
+        if (ct) ct.status = newStatus;
+        setCachedTasks(allCached);
+      }
+    }
     showToast("Saved ✓");
   } catch(e) { showToast("Save failed ✗"); }
 }
@@ -1536,6 +1579,7 @@ function closeConfigMenu() {
 }
 
 function switchTab(tab) {
+  _stopTasksAutoRefresh();
   _activeTab = tab;
   if (tab === "calendar") {
     _calView = "month";
