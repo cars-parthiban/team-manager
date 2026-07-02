@@ -1393,6 +1393,7 @@ function inlineStatusEdit(rowIndex) {
   td.querySelector("select").focus();
 }
 function cancelInlineStatus(rowIndex) {
+  if (_taskOpInProgress) return;
   const td = document.getElementById("td-status-" + rowIndex);
   const t  = _findTaskByRow(rowIndex);
   if (td && t) td.innerHTML = _statusCellInner(t);
