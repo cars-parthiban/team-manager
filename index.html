@@ -1401,14 +1401,15 @@ async function saveInlineStatus(rowIndex, newStatus) {
   const list = SESSION.role === "Manager" ? _allTasks : _memberTasks;
   const t = list.find(x => x.rowIndex === rowIndex);
   if (!t) return;
+  const oldStatus = t.status;
   t.status = newStatus;
   const td    = document.getElementById("td-status-" + rowIndex);
   const tdDue = document.getElementById("td-due-" + rowIndex);
-  if (td) td.innerHTML = _statusCellInner(t);
   if (tdDue) tdDue.innerHTML = _dueDateCellInner(t);
-  const ov = isOverdue(t.dueDate) && newStatus !== "Completed";
   const tr = td?.closest("tr");
-  if (tr) tr.style.background = ov ? "#fff1f2" : "#fff";
+  if (tr) tr.style.background = (isOverdue(t.dueDate) && newStatus !== "Completed") ? "#fff1f2" : "#fff";
+  if (td) td.innerHTML = `<span style="font-size:11px;color:#6b7280;font-weight:600;padding:3px 8px;display:inline-block;">Saving…</span>`;
+  _taskOpInProgress = true;
   try {
     await updateRow(CALENDAR_SHEET_ID, TASKS_SHEET_NAME, rowIndex,
       [t.taskId, t.assignedTo, t.task, t.dueDate, t.priority, newStatus, t.notes, t.url, t.enteredDate||"", t.enteredBy||"", _todayISO(), SESSION.name]);
@@ -1422,8 +1423,17 @@ async function saveInlineStatus(rowIndex, newStatus) {
         setCachedTasks(allCached);
       }
     }
-    showToast("Saved ✓");
-  } catch(e) { showToast("Save failed ✗"); }
+    if (td) td.innerHTML = `<span style="font-size:11px;background:#dcfce7;color:#166534;padding:3px 10px;border-radius:6px;font-weight:700;border:1px solid #bbf7d0;">✓ Saved</span>`;
+    setTimeout(() => { const c = document.getElementById("td-status-"+rowIndex); if (c) c.innerHTML = _statusCellInner(t); }, 1500);
+  } catch(e) {
+    t.status = oldStatus;
+    if (tr) tr.style.background = (isOverdue(t.dueDate) && oldStatus !== "Completed") ? "#fff1f2" : "#fff";
+    if (tdDue) tdDue.innerHTML = _dueDateCellInner(t);
+    if (td) td.innerHTML = `<span style="font-size:11px;background:#fee2e2;color:#991b1b;padding:3px 10px;border-radius:6px;font-weight:700;border:1px solid #fca5a5;">✗ Save failed — try again</span>`;
+    setTimeout(() => { const c = document.getElementById("td-status-"+rowIndex); if (c) c.innerHTML = _statusCellInner(t); }, 3000);
+  } finally {
+    _taskOpInProgress = false;
+  }
 }
 
 // ── ADD TASK MODAL ─────────────────────────────────────────────────────────────
