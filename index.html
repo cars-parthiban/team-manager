@@ -5242,10 +5242,9 @@ function renderTEventsGrid() {
       const dayEvts = mEvts.filter(e => e.startDate<=ds && e.endDate>=ds);
       const chips   = dayEvts.map(e => {
         const bg    = showAll ? memberColor(e.team) : memberColor(e.title);
-        const label = showAll ? `[${e.team}] ${e.title}` : e.title;
         return `<div onclick="event.stopPropagation();openTeamEventEditModal(${e.rowIndex})"
           title="${e.title}${e.desc?' | '+e.desc:''} (${e.team} · ${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)})"
-          style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>`;
+          style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%;">${e.title}</div>`;
       }).join("");
       const ceBizDayEvts = ceForBusiness.filter(e => e.startDate<=ds && e.endDate>=ds);
       const ceBizChips = ceBizDayEvts.map(e => {
@@ -5256,7 +5255,7 @@ function renderTEventsGrid() {
       }).join("");
       const bgN=isToday?"#f0fdf4":"#fff", bgH=isToday?"#d1fae5":"#f9fafb";
       return `<div onclick="openTeamEventAddModal('${ds}')"
-        style="min-height:80px;padding:3px 4px;border-right:1px solid #f3f4f6;background:${bgN};cursor:pointer;"
+        style="min-height:80px;padding:3px 4px;border-right:1px solid #f3f4f6;background:${bgN};cursor:pointer;overflow:hidden;min-width:0;"
         onmouseover="this.style.background='${bgH}'" onmouseout="this.style.background='${bgN}'">
         <div style="font-size:11px;font-weight:${isToday?700:500};width:19px;height:19px;display:flex;align-items:center;justify-content:center;border-radius:50%;${isToday?"background:#1b4332;color:#fff;":"color:#374151;"}">${day}</div>
         ${ceBizChips}${chips}
