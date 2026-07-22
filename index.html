@@ -5243,7 +5243,7 @@ function renderTEventsGrid() {
       const chips   = dayEvts.map(e => {
         const bg    = showAll ? memberColor(e.team) : memberColor(e.title);
         return `<div onclick="event.stopPropagation();openTeamEventEditModal(${e.rowIndex})"
-          title="${e.title}${e.desc?' | '+e.desc:''} (${e.team} · ${formatDueDate(e.startDate)} – ${formatDueDate(e.endDate)})"
+          title="${e.desc || e.title}"
           style="background:${bg};color:#fff;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;margin-top:2px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%;">${e.title}</div>`;
       }).join("");
       const ceBizDayEvts = ceForBusiness.filter(e => e.startDate<=ds && e.endDate>=ds);
